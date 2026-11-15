@@ -1,0 +1,27 @@
+# 密钥与配置（真实值不提交）
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 日志
+*.log
+
+# 工具缓存
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# 本地练习残留（SQLite 文件，不属于本项目）
+*.db
+
+# 测试覆盖率
+.coverage
+htmlcov/

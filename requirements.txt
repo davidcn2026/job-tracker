@@ -1,0 +1,10 @@
+# 直接依赖：代码里直接 import 的包，全部显式列出（含钉版本）
+fastapi==0.162.5
+uvicorn[standard]==0.54.0
+sqlalchemy[asyncio]==2.1.8
+aiomysql==0.3.2
+pydantic==2.14.3
+pydantic-settings==2.16.2
+python-dotenv==1.2.4
+# MySQL 8 的 caching_sha2_password 认证需要
+cryptography==50.0.2

@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = [".venv", "legacy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # FastAPI 的依赖注入必须写成默认参数形式：db: AsyncSession = Depends(get_database)
+    # 这是框架要求，不是代码缺陷
+    "B008",
+    # 泛型类建议改用 PEP 695 语法（class Resp[T]），但 Pydantic 对它的支持
+    # 在部分版本上仍有问题；先用 Generic[T] 这种兼容写法
+    "UP046",
+]
