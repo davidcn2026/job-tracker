@@ -133,8 +133,8 @@ Authorization: Bearer <token>
 | 值 | 含义 |
 |---|---|
 | `待投` | 已看到，还没投 |
-| `已投` | 已投递 |
-| `面试中` | 在面试流程中 |
+| `已投` | 已投递，等回应 |
+| `预约面试` | **已约好面试时间，还没面**（配合 `next_interview_at` 字段） |
 | `已面试` | 面试结束，等结果 |
 | `已挂` | 已明确失败 |
 
@@ -186,19 +186,24 @@ Authorization: Bearer <token>
 
 | # | 方法 | 路径 | 说明 | 认证 | 阶段 |
 |---|---|---|---|---|---|
-| 1 | `GET` | `/api/v1/health` | 健康检查 | 否 | P1 |
-| 2 | `POST` | `/api/v1/auth/login` | 登录，换取 token | 否 | P1 |
-| 3 | `GET` | `/api/v1/users/me` | 当前用户 | 是 | P1 |
-| 4 | `GET` | `/api/v1/jobs` | 投递列表（分页/筛选） | 是 | P1 |
-| 5 | `POST` | `/api/v1/jobs` | 新增投递 | 是 | P1 |
-| 6 | `GET` | `/api/v1/jobs/{job_id}` | 单个岗位 | 是 | P1 |
-| 7 | `PATCH` | `/api/v1/jobs/{job_id}` | 修改岗位 | 是 | P1 |
-| 8 | `DELETE` | `/api/v1/jobs/{job_id}` | 删除岗位 | 是 | P1 |
-| 9 | `GET` | `/api/v1/jobs/{job_id}/logs` | 状态历史 | 是 | P1 |
-| 10 | `POST` | `/api/v1/auth/logout` | 登出（作废 token） | 是 | P2 规划 |
-| 11 | `PUT` | `/api/v1/users/me/password` | 修改密码 | 是 | P2 规划 |
+| 1 | `GET` | `/api/v1/health` | 健康检查 | 否 | P1 ✅ |
+| 2 | `POST` | `/api/v1/auth/login` | 登录，换取 token | 否 | P1 ✅ |
+| 3 | `POST` | `/api/v1/auth/register` | 注册（受限开放：开关 + 邀请码） | 否 | P1 ✅ |
+| 4 | `GET` | `/api/v1/users/me` | 当前用户 | 是 | P1 ✅ |
+| 5 | `GET` | `/api/v1/jobs` | 投递列表（分页/筛选） | 是 | P1 ✅ |
+| 6 | `POST` | `/api/v1/jobs` | 新增投递 | 是 | P1 ✅ |
+| 7 | `GET` | `/api/v1/jobs/{job_id}` | 单个岗位 | 是 | P1 ✅ |
+| 8 | `PATCH` | `/api/v1/jobs/{job_id}` | 修改岗位 | 是 | P1 ✅ |
+| 9 | `DELETE` | `/api/v1/jobs/{job_id}` | 删除岗位 | 是 | P1 ✅ |
+| 10 | `GET` | `/api/v1/jobs/{job_id}/logs` | 状态历史 | 是 | P1 |
+| 11 | `POST` | `/api/v1/auth/logout` | 登出（作废 token） | 是 | P2 规划 |
+| 12 | `PUT` | `/api/v1/users/me/password` | 修改密码 | 是 | P2 规划 |
 
-**建议的实现顺序**：`1 → 2 → 3 → 5 → 4 → 7 → 8 → 9 → 6`
+> **进度（2026-11-17）**：1–9 已实现并通过验收，包含"两个账号互相看不到对方数据、越权返回 404"。
+>
+> **注册的决策变更（2026-11-17）**：原本列为非目标（用户由管理员预建），现改为**受限开放注册**——由 `REGISTER_OPEN` 开关控制是否开放，`REGISTER_CODE` 提供邀请码。默认关闭。理由：管理员预建意味着每次加人都要跑脚本，而给朋友开号的场景本身就需要一个入口；用开关把"开放窗口"限制在几分钟内，风险等同预建。
+
+**建议的实现顺序**：`1 → 2 → 4 → 6 → 5 → 8 → 9 → 10 → 7`
 
 理由：先做健康检查证明"服务能起、库能连"；再登录拿到 token；然后**先做新增**（它带事务，最难，先啃）；列表/详情/改/删可以照着第一个接口的模板复制。
 
@@ -243,9 +248,58 @@ Authorization: Bearer <token>
 | 401 | 用户名或密码错误（**不区分哪一个错**，避免枚举用户） |
 | 422 | 字段缺失或长度不符 |
 
-> **不在 v1 做注册接口**。用户由管理员（你）在数据库里预建：`INSERT INTO users (name, password_hash) VALUES (...)`。理由：只有 10 个以内的人用，注册流程是纯负担，还会引入"谁能注册"的治理问题。
+#### 2. 注册（受限开放）
 
-#### 2. 获取当前用户
+- **接口地址**：`POST /api/v1/auth/register`
+- **是否需要认证**：否
+- **准入控制**（两道锁，缺一不可）：
+
+| 配置项 | 位置 | 作用 |
+|---|---|---|
+| `REGISTER_OPEN` | `.env` | 总开关，默认 `false`。关闭时返回 403，**不再校验邀请码** |
+| `REGISTER_CODE` | `.env` | 邀请码，留空则不校验；非空时请求必须带上正确的 `code` |
+
+- **请求参数**：
+
+| 参数名 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| name | string | 是 | 用户名（2–20 字符）。**规划中**：将来支持邮箱登录时，需禁止含 `@` 以免与邮箱撞名 |
+| password | string | 是 | 密码（6–64 字符） |
+| code | string | 否 | 邀请码（仅当 `REGISTER_CODE` 非空时必填） |
+
+- **请求示例**：
+
+```json
+{ "name": "xiaoming", "password": "mypassword", "code": "TEST1234" }
+```
+
+- **响应示例**（成功直接返回 token，省一次登录请求）：
+
+```json
+{
+  "code": 201,
+  "message": "success",
+  "data": {
+    "token": "OUZTob6PpRq7RU1WRVS9inx_JJhnM3SlU3uL983OtgQ",
+    "user": { "id": 3, "name": "xiaoming" }
+  }
+}
+```
+
+- **失败**：
+
+| code | 场景 |
+|---|---|
+| 403 | 注册未开放（`REGISTER_OPEN=false`） |
+| 403 | 邀请码缺失或不正确 |
+| 409 | 用户名已被占用 |
+| 422 | 字段缺失或长度不符 |
+
+> **为什么开关要排在邀请码前面**：开关关闭时直接拒绝，连邀请码都不校验——这样即使邀请码外泄，只要开关是关的，就没人能注册。日常操作是"开号那几小时打开，开完关掉"。
+>
+> **为什么 `except IntegrityError` 不能省**：先查重只能挡住"顺序执行"的重复请求。两个请求同时通过查重、再同时插入时，数据库的唯一约束是最后一道防线，捕获它才能返回 409 而不是 500。
+
+#### 3. 获取当前用户
 
 - **接口地址**：`GET /api/v1/users/me`
 - **是否需要认证**：是
@@ -273,13 +327,13 @@ Authorization: Bearer <token>
 |---|---|---|---|
 | page | integer | 否 | 页码，默认 1，从 1 开始 |
 | page_size | integer | 否 | 每页条数，默认 20，最大 100 |
-| status | string | 否 | 按状态筛选：`待投`/`已投`/`面试中`/`已面试`/`已挂` |
+| status | string | 否 | 按状态筛选：`待投`/`已投`/`预约面试`/`已面试`/`已挂` |
 
 - **请求示例**：
 
 ```
 GET /api/v1/jobs
-GET /api/v1/jobs?page=2&page_size=20&status=面试中
+GET /api/v1/jobs?page=2&page_size=20&status=预约面试
 ```
 
 - **响应示例**：
@@ -432,7 +486,7 @@ GET /api/v1/jobs?page=2&page_size=20&status=面试中
     "id": 3,
     "company": "公司C",
     "status": "已面试",
-    "from_status": "面试中"
+    "from_status": "预约面试"
   }
 }
 ```
@@ -475,7 +529,7 @@ GET /api/v1/jobs?page=2&page_size=20&status=面试中
   "message": "success",
   "data": {
     "list": [
-      { "id": 2, "from_status": "面试中", "to_status": "已面试", "created_at": "2026-10-20T22:53:01" },
+      { "id": 2, "from_status": "预约面试", "to_status": "已面试", "created_at": "2026-10-20T22:53:01" },
       { "id": 1, "from_status": "-", "to_status": "已投", "created_at": "2026-10-20T22:03:32" }
     ],
     "total": 2,

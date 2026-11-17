@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.exceptions import register_exception_handlers
-from app.routers import health, job
+from app.routers import health, job, user
 
 app = FastAPI(
     title="投递记录服务",
@@ -18,6 +18,7 @@ register_exception_handlers(app)
 
 app.include_router(health.router)
 app.include_router(job.router)
+app.include_router(user.router)
 
 # 本地静态资源（Swagger UI 的 js/css 已下载到 static/swagger/）
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"

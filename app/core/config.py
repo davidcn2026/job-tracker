@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     db_password: str
     db_name: str
 
+    register_open: bool = False          # 默认关闭（安全默认）
+    register_code: str | None = None     # 邀请码，留空则不校验
+
     debug: bool = False
 
     @property
