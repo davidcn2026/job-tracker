@@ -1,7 +1,10 @@
-"""一次性种子数据：插入 10 条投递记录。
+"""一次性种子数据：插入 10 条投递记录（含真实感的 JD 文本，便于试 AI 分析）。
 
 用法：python seed_jobs.py
-注意：user_id 先固定为 1（users 表和外键还没做）。
+
+前提：把下面的 USER_ID 改成你自己的用户 id——这 10 条记录会挂在该用户名下。
+      查看现有用户：SELECT id, name FROM users;
+      （本项目第一个创建的用户通常是 1）
 """
 
 import asyncio
@@ -10,13 +13,20 @@ from datetime import date
 from app.db.session import AsyncSessionLocal, engine
 from app.models.job import Job
 
+# 这 10 条数据归属的用户 id。换成你自己的：
+#   mysql> SELECT id, name FROM users;
+USER_ID = 1
+
 ROWS = [
     dict(
         company="星辰科技", position="Python 后端开发实习生", status="已投",
         salary_min=15, salary_max=25, salary_note="13薪",
         source="Boss直聘", url="https://example.com/job/1001",
         published_at=date(2026, 10, 8),
-        description="岗位职责：负责内部平台后端接口开发；任职要求：熟悉 Python、FastAPI、MySQL，有项目经验优先。",
+        description=(
+            "岗位职责：负责内部平台后端接口开发；"
+            "任职要求：熟悉 Python、FastAPI、MySQL，有项目经验优先。"
+        ),
         company_business="企业级 SaaS", note="HR 说一周内安排笔试",
     ),
     dict(
@@ -25,7 +35,10 @@ ROWS = [
         source="本校", source_detail="校招宣讲会",
         url="https://example.com/job/1002",
         published_at=date(2026, 10, 10),
-        description="负责 LLM 应用落地，包括 RAG 检索、提示词工程、评测。要求熟悉 Python，了解向量库。",
+        description=(
+            "负责 LLM 应用落地，包括 RAG 检索、提示词工程、评测。"
+            "要求熟悉 Python，了解向量库。"
+        ),
         company_business="行业大模型解决方案", note="一面已过，二面等下周三通知",
     ),
     dict(
@@ -33,7 +46,10 @@ ROWS = [
         salary_min=18, salary_max=30, salary_note="含绩效",
         source="Boss直聘", url="https://example.com/job/1003",
         published_at=date(2026, 10, 5),
-        description="负责数据平台后端服务开发，要求掌握 Python/Java 其一，熟悉 MySQL、Redis、Docker。",
+        description=(
+            "负责数据平台后端服务开发，要求掌握 Python/Java 其一，"
+            "熟悉 MySQL、Redis、Docker。"
+        ),
         company_business="数据中台与 BI", note="要求 Docker，正好在补",
     ),
     dict(
@@ -99,9 +115,9 @@ ROWS = [
 async def main() -> None:
     try:
         async with AsyncSessionLocal() as db:
-            db.add_all([Job(user_id=1, **row) for row in ROWS])
+            db.add_all([Job(user_id=USER_ID, **row) for row in ROWS])
             await db.commit()
-        print(f"插入完成：{len(ROWS)} 条")
+        print(f"插入完成：{len(ROWS)} 条（user_id={USER_ID}）")
     finally:
         await engine.dispose()
 
