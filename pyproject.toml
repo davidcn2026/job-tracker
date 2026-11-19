@@ -13,3 +13,8 @@ ignore = [
     # 在部分版本上仍有问题；先用 Generic[T] 这种兼容写法
     "UP046",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# 提示词模板与技能档案是整段长文本，按语义分段而非按行宽折行。
+# 为了 100 字符的行宽去硬折提示词，反而会让内容更难维护。
+"app/services/llm.py" = ["E501"]

@@ -3,14 +3,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crud import user as crud_user
 from app.core.config import settings
 from app.core.deps import get_current_user
-from app.core.security import verify_password, generate_token, token_hash, hash_password
+from app.core.security import generate_token, hash_password, token_hash, verify_password
+from app.crud import user as crud_user
 from app.db.session import get_database
 from app.models import User
 from app.schemas.response import Resp
-from app.schemas.user import LoginIn, TokenOut, UserOut, RegisterIn
+from app.schemas.user import LoginIn, RegisterIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -56,7 +56,6 @@ async def register(
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="用户名已被占用") from None
-
     # 直接发 token （省一次登录请求）
     token = generate_token()
     user.token = token_hash(token)

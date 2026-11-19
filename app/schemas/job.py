@@ -59,6 +59,9 @@ class JobOut(BaseModel):
     company_business: str | None
     created_at: datetime
     next_interview_at: datetime | None = None
+    match_score: int | None
+    verdict: str | None = None
+    analyzed_at: datetime | None
 
 
 class JobDetail(JobOut):
@@ -66,6 +69,7 @@ class JobDetail(JobOut):
 
     description: str | None
     note: str | None
+    analysis: str | None
 
 
 class JobListData(BaseModel):

@@ -29,7 +29,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def custom_swagger_ui() -> HTMLResponse:
     """用本地资源渲染 Swagger UI，不依赖外网 CDN。"""
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url=app.openapi_url or "/openapi.json",
         title=f"{app.title} - Swagger UI",
         swagger_js_url="/static/swagger/swagger-ui-bundle.js",
         swagger_css_url="/static/swagger/swagger-ui.css",

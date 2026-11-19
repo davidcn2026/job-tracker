@@ -22,6 +22,7 @@ class Job(Base):
         UniqueConstraint("user_id", "company", "position", name="uk_user_company_position"),
         Index("idx_user_status", "user_id", "status"),
         Index("idx_user_published", "user_id", "published_at"),
+        Index("idx_user_verdict", "user_id", "verdict"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -55,3 +56,9 @@ class Job(Base):
         DateTime,
         server_default=text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
     )
+
+    match_score: Mapped[int | None] = mapped_column(Integer)
+    analysis: Mapped[str | None] = mapped_column(Text)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    verdict: Mapped[str | None] = mapped_column(String(20))

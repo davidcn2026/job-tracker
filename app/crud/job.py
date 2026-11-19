@@ -1,8 +1,11 @@
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
 from app.schemas.job import JobIn, JobUpdate
+from app.schemas.llm import AnalysisResult
 
 
 async def list_jobs(
@@ -64,3 +67,20 @@ async def delete_job(db: AsyncSession, user_id: int, job_id: int) -> bool:
     await db.delete(job)
     await db.commit()
     return True
+
+
+async def save_analysis(db: AsyncSession, job: Job, result: AnalysisResult) -> Job:
+    """写入 AI 分析结果。
+
+    analysis 存完整 JSON（而不只是结论文字），便于将来回看模型当时给出的
+    全部细节（matched / gaps / blocking_gaps）。analyzed_at 用本地时间，
+    与数据库 DATETIME 的存储约定保持一致。
+    """
+    job.match_score = result.match_score
+    job.verdict = result.verdict
+    job.analysis = result.model_dump_json()
+    job.analyzed_at = datetime.now()
+
+    await db.commit()
+    await db.refresh(job)
+    return job
