@@ -27,8 +27,7 @@ data/
 docs/
 README.md
 
-# 本地开发用的脚本（容器的职责是"跑服务"，不是"造数据"）
+# 本地开发用的造数脚本（容器里用不到；但 create_user.py 是运维工具，要进镜像）
 init_db.py
 seed_jobs.py
-create_user.py
 try_analyze.py

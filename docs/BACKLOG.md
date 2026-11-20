@@ -89,13 +89,14 @@ GET /api/v1/jobs?q=Python&status=预约面试&source=Boss直聘
 | # | 事项 | 价值 | 成本 |
 |---|---|---|---|
 | 1 | `GET /jobs` 加筛选参数（`status` / `source` / `q`） | 列表可用性 | 30 分钟 |
-| 2 | **Docker + 部署** | 补 `profile.md` 三个缺口；求职卖点 | 半天～1 天 |
+| 2 | ~~Docker + 部署~~ | **已完成**（Dockerfile + `.dockerignore` + `compose.yaml`，迁移文件由 MySQL 初始化自动执行） | — |
 | 3 | **前端页面**（登录 + 列表 + 增删改） | 手机上真正能用 | 1～2 天 |
 | 4 | 状态历史 `status_log` | 转化率复盘 | 半天 |
 | 5 | pytest 测试 | 回归保护 | 半天 |
 | 6 | 公司重复 / 渠道分组 | 数据完整性 | 见"已定结论 1" |
+| 7 | **重写 README §5–§8** | 现在还是 P0 双表设计的描述，`status_log` 并不存在；已加过时警告但内容仍需按当前 schema 重写 | 1～2 小时 |
 
-**注**：`profile.md` 里 4 个缺口是 Docker / MySQL 实战 / 部署 / 并发。MySQL 实战已通过本项目大量写入补齐；**Docker + 部署仍是最大的两个缺口**，对求职价值高于前端。
+**注**：`profile.md` 里 4 个缺口是 Docker / MySQL 实战 / 部署 / 并发。MySQL 实战与 Docker、部署已补齐；**并发 / 后端工程仍是空白**（"一投后端就会被问"的项）。
 
 ---
 

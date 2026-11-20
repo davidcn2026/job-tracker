@@ -1,0 +1,60 @@
+# docker compose up -d  —— 一条命令起全套（应用 + 数据库）
+#
+# 与"单容器 + 宿主机 MySQL"的区别：
+#   - 数据库也在容器里，别人 clone 下来不用自己装 MySQL
+#   - 容器之间用「服务名」互相访问（app 里 DB_HOST=db，db 就是服务名）
+#
+# 变量从同目录的 .env 自动读取（compose 自带这个行为）。
+# 带 :? 的写法表示「必须设置，否则启动时报错并显示提示」——避免用默认密码蒙混过去。
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      # root 密码只在初始化时使用，应用本身不用 root 连接
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?请在 .env 里设置 DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:?请在 .env 里设置 DB_NAME}
+      # 应用专用账号：只对 MYSQL_DATABASE 有权限，不能管其他库、不能建用户
+      MYSQL_USER: ${DB_APP_USER:?请在 .env 里设置 DB_APP_USER}
+      MYSQL_PASSWORD: ${DB_APP_PASSWORD:?请在 .env 里设置 DB_APP_PASSWORD}
+    volumes:
+      # 数据持久化：不加这个，docker compose down 之后数据全丢
+      - db_data:/var/lib/mysql
+      # 首次初始化时按文件名顺序执行 .sql —— 001~006 依次跑完，schema 就完整了。
+      # 这正是「把每次表结构变更写成迁移文件」的回报：一条命令重建整个库。
+      # 注意：只在数据目录为空（首次启动）时执行，之后不会重复跑。
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # 让 app 等数据库真的能连了再启动；否则第一条请求会 503
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 关键：容器里的主机名是服务名 db，不是 127.0.0.1
+      # （127.0.0.1 在容器里指容器自己）
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${DB_APP_USER}
+      DB_PASSWORD: ${DB_APP_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DEBUG: ${DEBUG:-false}
+      REGISTER_OPEN: ${REGISTER_OPEN:-false}
+      REGISTER_CODE: ${REGISTER_CODE:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

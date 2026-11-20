@@ -23,6 +23,10 @@ COPY app/ ./app/
 COPY static/ ./static/
 COPY migrations/ ./migrations/
 
+# 运维工具：容器里没有注册开关时，用它创建第一个账号
+#   docker compose exec app python create_user.py 用户名 密码
+COPY create_user.py ./
+
 # 非 root 运行：容器被攻破时不会是 root 权限，能做的破坏有限。
 # 先建用户再切换，顺序不能反。
 RUN useradd --create-home --shell /bin/bash appuser

@@ -1,89 +1,104 @@
 # 投递记录服务
 
-> **状态**：P0（单用户 CRUD + 事务）已完成并验证；**P1 重构中**——多用户 + async SQLAlchemy + `/api/v1` + 统一响应。
-> P0 的同步 `pymysql` 版本已归档到 `legacy/`，仅作对照，不参与运行。
+> **状态**：P1 已完成——多用户认证（Bearer token）、jobs 五接口、统一响应与全局异常处理、
+> AI 岗位匹配分析（四档投递建议）、Docker 容器化（含 compose 一键起全套）。
+> 未做：状态历史、前端页面、状态变更流水。
 >
-> **文档索引**：[接口规范](docs/API.md) · [技术架构与决策](docs/ARCHITECTURE.md)
+> **文档索引**：[接口规范](docs/API.md) · [技术架构与决策](docs/ARCHITECTURE.md) · [待办与已定决策](docs/BACKLOG.md)
 
 ## 1. 这是什么
 
-记录我投了哪些公司、现在走到哪一步（待投 / 已投 / 面试中 / 已面试）。
+记录我投了哪些公司、现在走到哪一步（待投 / 已投 / 预约面试 / 已面试 / 已挂）。
 
-**解决什么问题**：投递多了以后，Excel 记不住“这家我到底投没投、上次聊到哪一步”。
-这个服务让我在手机上就能查、能改状态，并且**每次状态变更都留下一条记录**——
-面试前翻一眼就知道某家公司什么时候投的、几号面的。
+**解决什么问题**：投递多了以后，Excel 记不住"这家我到底投没投、上次聊到哪一步"。
+这个服务让我在手机上就能查、能改状态，并且**能对岗位 JD 跑一次 AI 匹配分析**——
+给出"推荐投递 / 可考虑投递 / 可以投递 / 不建议投递"的建议，以及缺失的核心能力。
 
 ## 2. 技术栈
 
-> 下表是 **P0 实际使用**的技术。P1 目标栈（SQLAlchemy 2.0 async + aiomysql + pydantic-settings）
-> 与取舍理由见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+> 与取舍理由见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，接口约定见 [docs/API.md](docs/API.md)。
 
 | 组件 | 用途 |
 |---|---|
 | Python 3.13 | 语言 |
 | FastAPI | 提供 HTTP 接口，自带 `/docs` 交互文档 |
 | Uvicorn | 运行 FastAPI 的服务器 |
-| PyMySQL | 连接 MySQL 的驱动 |
-| python-dotenv | 从 `.env` 读取数据库配置 |
+| **SQLAlchemy 2.0（async）+ aiomysql** | 异步 ORM 与 MySQL 驱动 |
+| **Pydantic v2 / pydantic-settings** | 请求校验、统一响应、配置读取 |
+| **OpenAI SDK（指向 DeepSeek）** | AI 匹配分析 |
 | MySQL 8.0.46 | 存储数据 |
+| Docker + Compose | 容器化部署（应用 + 数据库） |
+| pytest / ruff | 测试与静态检查（ruff 已接入） |
+
 
 ## 3. 怎么跑起来
 
-### 3.1 启动数据库
+### 3.1 最快：Docker Compose（推荐）
+
+一条命令起完整服务（应用 + MySQL + 自动建表）：
 
 ```powershell
-net start MySQL80
+Copy-Item .env.example .env      # 然后填 DB_ROOT_PASSWORD / DB_APP_PASSWORD / DEEPSEEK_API_KEY
+docker compose up -d --build
 ```
 
-### 3.2 建库建表
+**它做了什么**：
 
-在 `mysql` 客户端里执行：
+1. 起一个 `mysql:8.0` 容器，首次启动时**按文件名顺序自动执行 `migrations/001~006`**，建出完整表结构
+2. 起应用容器（非 root 用户 `appuser`），等数据库 `healthy` 后才启动
+3. 应用通过服务名 `db` 连接数据库（容器网络内部 DNS），**不使用 root 账号**
 
-```sql
-CREATE DATABASE learn CHARACTER SET utf8mb4;
-USE learn;
-
-CREATE TABLE jobs (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  company VARCHAR(100) NOT NULL UNIQUE,
-  status VARCHAR(20) NOT NULL DEFAULT '待投'
-);
-
-CREATE TABLE status_log (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  job_id INT NOT NULL,
-  from_status VARCHAR(20) NOT NULL,
-  to_status VARCHAR(20) NOT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### 3.3 装依赖
+首次跑完后创建第一个用户（容器里没有注册开关时用这个）：
 
 ```powershell
-python -m pip install fastapi uvicorn pymysql python-dotenv
+docker compose exec app python create_user.py zyp1 你的密码
 ```
 
-### 3.4 配 `.env`
+打开 <http://127.0.0.1:8000/docs> 验证。
 
-把 `.env.example` 复制成 `.env`，填入自己的数据库密码：
+常用命令：
 
 ```powershell
-Copy-Item .env.example .env
+docker compose ps                  # 看状态
+docker compose logs -f app         # 跟踪应用日志
+docker compose down                # 停止（数据保留在 db_data 卷里）
+docker compose down -v             # 停止并删除数据卷（会清空数据库）
 ```
 
-`.env` 已被 `.gitignore` 排除，不会进版本库；仓库里只留占位符 `DB_PASSWORD=<你的密码>`。
+> **注意**：`docker compose down -v` 之后再 `up`，`migrations` 会重新执行一遍——这正好说明迁移文件是自洽的。
 
-### 3.5 启动
+### 3.2 本地开发（直连宿主机 MySQL）
+
+适合改代码时用（有 `--reload` 热重载）：
 
 ```powershell
-python -m uvicorn serve:app --host 0.0.0.0 --port 8000 --reload
+net start MySQL80                                  # 启动本机 MySQL
+Copy-Item .env.example .env                        # 填 DB_HOST=127.0.0.1 / DB_USER=root 等
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-- 本机打开：`http://127.0.0.1:8000/docs`
-- 手机打开（同一 WiFi）：先用 `ipconfig` 查 WLAN 的 IPv4，再访问 `http://<那个IP>:8000/docs`
-- `--host 0.0.0.0` 是手机能访问的前提；只写 `127.0.0.1` 的话手机一定打不开
-- `--reload` 只在开发时用，正式部署要关掉
+表结构用迁移文件建（不要手写 `CREATE TABLE`）：
+
+```powershell
+$env:MYSQL_PWD='你的root密码'
+$mysql = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
+& $mysql -u root -e "CREATE DATABASE IF NOT EXISTS job_tracker CHARACTER SET utf8mb4;"
+foreach ($f in Get-ChildItem migrations\*.sql | Sort-Object Name) {
+  cmd /c "`"$mysql`" -u root --default-character-set=utf8mb4 job_tracker < `"$($f.FullName)`""
+}
+```
+
+> **为什么用迁移文件而不是手写建表**：表结构有 20+ 列、6 次变更历史，手写必然与实际不符（README 之前那版就是典型例子）。迁移文件是 schema 的唯一真相。
+
+### 3.3 手机访问
+
+| 场景 | 做法 |
+|---|---|
+| 同一 WiFi | 应用容器已映射 `8000`，用 `ipconfig` 查 WLAN 的 IPv4，访问 `http://<IP>:8000/docs` |
+| 异地（临时演示） | 内网穿透（如 cpolar），**但务必先确认 `DEBUG=false`、注册已关闭** |
+
+⚠️ `--host 0.0.0.0`（Docker 里已默认）是手机能访问的前提；只绑 `127.0.0.1` 手机一定打不开。
 
 ## 4. 接口
 
@@ -110,7 +125,17 @@ python -m uvicorn serve:app --host 0.0.0.0 --port 8000 --reload
 
 ## 5. 数据库设计
 
+> ⚠️ **本节是 P0 版本的设计记录，已与当前 schema 不符。**
+>
+> 当前实际情况：
+> - 只有 **`jobs`** 和 **`users`** 两张表（`status_log` **尚未实现**，见 [BACKLOG](docs/BACKLOG.md)）
+> - `jobs` 有 22 列（含 AI 分析相关的 `match_score` / `verdict` / `analysis` / `analyzed_at`）
+> - 表结构以 **`migrations/*.sql` 为准**，完整 DDL 见 [API.md 附录 A](docs/API.md)
+>
+> 下面保留 P0 的设计思路（双表拆分"现状 / 历史"）作为演进参考，**不要照它建表**。
+
 ```sql
+-- P0 设计（已过时，仅作对照）
 jobs        id, company, status
 status_log  id, job_id, from_status, to_status, created_at
 ```
