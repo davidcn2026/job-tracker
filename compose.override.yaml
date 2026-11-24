@@ -1,0 +1,37 @@
+# ⚠️ 本地开发专用。绝对不要在生产环境加载这个文件。
+#
+# Docker Compose 在【不指定 -f】时会自动把这个文件合并进 compose.yaml，
+# 所以在本目录直接 `docker compose up -d` = 开发模式（挂载源码 + 热重载）。
+#
+# 生产环境必须显式指定文件，这样 override 不会被加载：
+#     docker compose -f compose.prod.yaml up -d
+# 一旦你在命令里用了任何 -f，compose 就不再自动加载 compose.override.yaml。
+#
+# 与生产配置的区别：
+#   - 源码用 bind mount 挂进去（容器直接读你磁盘上的文件，不复制）
+#   - 用 --reload 热重载（改 .py 自动重启）
+#   - 前端改动连重启都不需要，刷新浏览器即可
+# 代价：运行环境依赖宿主机文件，无法追溯版本、无法回滚 —— 所以只能开发用。
+
+services:
+  app:
+    volumes:
+      # :ro = 只读挂载，容器不能改你的源码（避免容器里误改文件导致困惑）
+      - ./app:/app/app:ro
+      - ./frontend:/app/frontend:ro
+      - ./static:/app/static:ro
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+    environment:
+      # 关键：Windows 上的 bind mount 不会可靠地传递文件变更事件，
+      # watchfiles 靠 inotify 收不到通知 → 热重载失灵。
+      # 打开强制轮询后改代码才能触发重启。
+      WATCHFILES_FORCE_POLLING: "true"
