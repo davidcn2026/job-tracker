@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,10 +9,15 @@ from app.crud import job as crud_job
 from app.db.session import get_database
 from app.models import User
 from app.schemas.job import JobDeleted, JobDetail, JobIn, JobListData, JobOut, JobUpdate
+from app.schemas.llm import JobDraft
 from app.schemas.response import Resp
-from app.services.llm import LLMError, analyze_jd
+from app.services.llm import LLMError, analyze_jd, extract_job_from_image
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
+
+# 截图大小上限。手机上长截图常见 1~3 MB，10 MB 足够，也防止有人传巨大文件耗内存。
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
 @router.get("/jobs", response_model=Resp[JobListData])
@@ -60,6 +65,40 @@ async def create_job(
     except IntegrityError:
         raise HTTPException(status_code=409, detail="该公司下已有这个岗位") from None
     return Resp(code=201, data=JobDetail.model_validate(job))
+
+
+@router.post("/jobs/extract", response_model=Resp[JobDraft])
+async def extract_job(
+    image: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """招聘截图 → 岗位草稿。
+
+    **只返回草稿，不写库。** 前端拿到后预填到「新增」表单，由用户确认再保存。
+    这样模型看错时你能当场发现，而不是错误数据静默进库。
+    """
+    mime = (image.content_type or "").lower()
+    if mime not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"不支持的图片格式：{mime or '未知'}，请上传 PNG/JPEG/WebP",
+        )
+
+    content = await image.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="图片内容为空")
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"图片太大（{len(content) // 1024} KB），上限 10 MB",
+        )
+
+    try:
+        draft = await extract_job_from_image(content, mime)
+    except LLMError:
+        raise HTTPException(status_code=503, detail="截图识别暂时不可用，请稍后重试") from None
+
+    return Resp(data=draft)
 
 
 @router.patch("/jobs/{job_id}", response_model=Resp[JobDetail])

@@ -1,8 +1,12 @@
+import asyncio
+import base64
+
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.schemas.llm import AnalysisResult
+from app.schemas.llm import AnalysisResult, JobDraft
+from app.services.image import prepare_images
 
 SYSTEM_PROMPT = """你是岗位匹配分析助手。根据【我的技能】判断【JD原文】是否值得投递。
 
@@ -42,15 +46,45 @@ summary 的写法（必须遵守）：
 - 错误：「…建议定制简历后投递」（出现建议投递的意思）
 - 档位只由 verdict 字段表达，summary 不重复它。这样无论档位被如何调整，summary 都不会自相矛盾。
 """
-
+ 
 # ===== 创建客户端（指向 DeepSeek，模块导入时执行一次） =====
 _client = AsyncOpenAI(
     api_key=settings.deepseek_api_key,
     base_url=settings.deepseek_base_url,
 )
 
+
 class LLMError(Exception):
     """LLM 调用失败。service 层不抛 HTTPException，由 router 翻译。"""
+
+
+# ===== 截图解析提示词 =====
+# 要点：
+#   1. 只让它抽"截图上真实存在的文字"，避免编造公司/薪资
+#   2. 不要求它猜 published_at / url —— 截图里通常没有，猜了就是脏数据
+#   3. 要求 confidence，让前端能提示"这次可能不准"
+EXTRACT_PROMPT = """你是招聘截图解析助手。从用户给的招聘页面截图里抽取岗位信息，只输出 json。
+
+输出字段：
+- company: 公司名；截图里没有就 null
+- position: 岗位名称；没有就 null
+- salary_min / salary_max: 月薪下限/上限，单位「千元/月」，整数。
+  例：「15-25K」→ 15 和 25；「8-12k·13薪」→ 8 和 12。没有就 null
+- salary_note: 薪资附加说明（如「13薪」「含绩效」「试用期八折」）；没有就 null
+- source: 招聘渠道，只能从 ["本校","Boss直聘","自定义","其他"] 里选一个。
+  截图上能看出平台名就选对应的；看不出来选 "其他"
+- source_detail: 平台名 / 内推人等补充信息；没有就 null
+- company_business: 公司业务或行业（如「企业级 SaaS」「互联网」「游戏研发」）；没有就 null
+- description: 岗位职责 + 任职要求的完整原文，尽量逐字保留，用换行分隔；没有就 null
+- confidence: 0-1 的数字，你对这次整体抽取准确度的信心
+
+规则：
+1. 只抽取截图上真实存在的文字，禁止编造、推断、补充
+2. 看不清、被截断、图上没有的字段一律填 null，不要猜
+3. 图里若有多条岗位，只取最主要的那一条
+4. 「2027 届」「应届」「本科」这类届别与学历要求属于重要信息，放进 description 里，不要丢弃
+"""
+
 
 PROFILE_SUMMARY: str = """【目标岗位】AI 应用开发 / Python 后端开发（校招或实习）
 【学历】南昌航空大学 网络工程 本科，2027 届
@@ -120,3 +154,144 @@ async def analyze_jd(jd: str) -> AnalysisResult:
     except ValidationError as e:
         # 模型输出不是合法 JSON，或字段/枚举/范围不合规
         raise LLMError(f"模型输出不符合格式: {e}") from e
+
+
+async def call_llm_vision(system: str, text: str, image_data_url: str) -> str:
+    """带图片的多模态调用，返回模型原始文本。
+
+    与 call_llm 的差别只在 user content 的形状（图片用 image_url 传 base64 data URL）。
+    超时给 60 秒：截图解析比纯文本慢，长截图尤其。
+    """
+    try:
+        response = await _client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                },
+            ],
+            temperature=0.0,
+            timeout=60,
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        raise LLMError(f"模型调用失败: {e}") from e
+
+    content = response.choices[0].message.content
+    if not content:
+        raise LLMError("模型返回了空内容")
+    return content
+
+
+async def extract_job_from_image(image_bytes: bytes, mime: str) -> JobDraft:
+    """业务层：招聘截图 → 岗位草稿。
+
+    只返回草稿，**不写库**。写库必须由用户在前端确认后再走 POST /jobs，
+    因为模型会看错（比如把「15-25K」读成 25-15，或把公司名读成岗位名）。
+
+    超长截图（高度 > 8192px）会被切片，每片单独识别后合并——见 services/image.py。
+    """
+    if not settings.deepseek_api_key:
+        raise LLMError("未配置 DEEPSEEK_API_KEY，无法识别截图")
+
+    if not image_bytes:
+        raise LLMError("图片内容为空")
+
+    try:
+        parts = prepare_images(image_bytes, mime)
+    except Exception as e:
+        raise LLMError(f"图片无法解析：{e}") from e
+
+    total = len(parts)
+    tasks = []
+    for index, (content, part_mime) in enumerate(parts, start=1):
+        if total == 1:
+            instruction = "解析这张招聘截图。"
+        else:
+            # 关键：重新定义切片场景下 confidence 的含义。
+            # 否则第 2 段只看到"任职要求"、没有公司名和薪资，会自评很低（0.2~0.3），
+            # 合并后把一次很好的识别报成"信心 30%"，反而让人不敢用。
+            instruction = (
+                f"这是一张长截图从上往下切出的第 {index}/{total} 段，"
+                "只解析本段中出现的文字，不要推测其它段的内容；"
+                "本段没有出现公司名、岗位名或薪资是正常的，不要因此降低 confidence。"
+                "confidence 只表示你对『本段文字的识别准确度』的信心。"
+            )
+        data_url = f"data:{part_mime};base64,{base64.b64encode(content).decode()}"
+        tasks.append(call_llm_vision(EXTRACT_PROMPT, instruction, data_url))
+
+    # 并行调用：切片越多越能显出并行优势
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    drafts: list[JobDraft] = []
+    errors: list[str] = []
+    for item in results:
+        if isinstance(item, BaseException):
+            errors.append(str(item))
+            continue
+        try:
+            drafts.append(JobDraft.model_validate_json(item))
+        except ValidationError as e:
+            errors.append(f"模型输出不符合格式: {e}")
+
+    if not drafts:
+        raise LLMError(errors[0] if errors else "模型没有返回可用结果")
+
+    return _merge_drafts(drafts)
+
+
+# 合并时"从上往下第一个非空值胜出"的字段：
+# 公司/岗位/薪资在截图顶部，切片越多越不该让下面的段覆盖它们。
+_MERGE_SCALARS = (
+    "company",
+    "position",
+    "salary_min",
+    "salary_max",
+    "salary_note",
+    "company_business",
+    "source_detail",
+    "url",
+    "published_at",
+)
+
+
+def _merge_drafts(drafts: list[JobDraft]) -> JobDraft:
+    """把多段切片的结果合并成一份草稿。"""
+    if len(drafts) == 1:
+        return drafts[0]
+
+    merged = JobDraft()
+
+    for name in _MERGE_SCALARS:
+        for draft in drafts:
+            value = getattr(draft, name)
+            if value is not None and value != "":
+                setattr(merged, name, value)
+                break
+
+    # source 有默认值「其他」，所以只在某段给出了具体渠道时才覆盖
+    merged.source = next((d.source for d in drafts if d.source != "其他"), "其他")
+
+    # 描述按切片顺序拼接，去掉完全重复的片段（重叠区会重复识别）
+    pieces: list[str] = []
+    for draft in drafts:
+        text = (draft.description or "").strip()
+        if text and text not in pieces:
+            pieces.append(text)
+    merged.description = "\n".join(pieces) or None
+
+    # 信心只统计"真有内容"的切片。
+    # 长截图切出来的结尾片往往大半是空白/页脚，它会自评很低（0.2~0.3），
+    # 用全体 min() 会把一次很好的识别报成"信心 30%"，反而让人不敢用。
+    informative = [
+        d for d in drafts
+        if (d.description or "").strip() or d.company or d.position
+    ]
+    pool = informative or drafts
+    merged.confidence = min(d.confidence for d in pool)
+    return merged

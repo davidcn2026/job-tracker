@@ -14,13 +14,20 @@ WORKDIR /app
 # 这是 Docker 层缓存的关键：改代码时 requirements.txt 没变，
 # 这一层就命中缓存，不会重新 pip install（否则每次改代码都要等 1 分钟）。
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# PyPI 镜像：容器内直连 pypi.org 经常不可达（[Errno 101] Network is unreachable），
+# 必须走国内镜像才能构建。
+# 用 ARG 而不是写死，方便在其它网络环境覆盖：
+#   docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple .
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r requirements.txt
 
 # 再拷应用代码（这一层变得频繁，但很快）
 # static/ 必须拷：app/main.py 会挂载 /app/static 提供离线 Swagger UI，
 # 目录不存在会直接 RuntimeError 启动失败。
 COPY app/ ./app/
 COPY static/ ./static/
+COPY frontend/ ./frontend/
 COPY migrations/ ./migrations/
 
 # 运维工具：容器里没有注册开关时，用它创建第一个账号
