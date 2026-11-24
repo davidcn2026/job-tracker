@@ -54,7 +54,18 @@ docker compose up -d --build
 docker compose exec app python create_user.py zyp1 你的密码
 ```
 
-打开 <http://127.0.0.1:8000/docs> 验证。
+打开 <http://127.0.0.1:8000/>（前端界面）或 <http://127.0.0.1:8000/docs>（接口文档）验证。
+
+想先塞 10 条演示数据看看界面效果：
+
+```powershell
+docker compose cp seed_jobs.py app:/app/seed_jobs.py
+docker compose exec app python seed_jobs.py
+```
+
+> ⚠️ **注意：容器里的 MySQL 和宿主机的 MySQL 是两个独立的库。**
+> 你在宿主机 `job_tracker` 库里已有的数据，容器里**看不到**——容器用的是自己的 `db_data` 卷，
+> 只由 `migrations/` 初始化。想把宿主机数据迁过来要单独 `mysqldump` + 导入。
 
 常用命令：
 
@@ -67,7 +78,40 @@ docker compose down -v             # 停止并删除数据卷（会清空数据�
 
 > **注意**：`docker compose down -v` 之后再 `up`，`migrations` 会重新执行一遍——这正好说明迁移文件是自洽的。
 
-### 3.2 本地开发（直连宿主机 MySQL）
+### 3.2 本地开发（改代码即时生效）
+
+日常写代码**不要走镜像重建**（改一行要等构建）。有两种方式：
+
+**方式 A：容器里开发（挂载源码 + 热重载）**
+
+仓库里的 `compose.override.yaml` 会自动被加载，所以直接：
+
+```powershell
+docker compose up -d
+```
+
+此时 `app/`、`frontend/`、`static/` 是 **bind mount** 挂进容器的：
+- 改前端 → **刷新浏览器即可**，连重启都不需要
+- 改后端 `.py` → uvicorn `--reload` 自动重启（约 1 秒）
+
+> `WATCHFILES_FORCE_POLLING=true` 是必须的：Windows 上的 bind mount 不会可靠传递文件变更事件，
+> 靠 inotify 的热重载会失灵，只能改成轮询。
+
+**方式 B：完全不用 Docker（最快）**
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+连宿主机 MySQL（`.env` 里 `DB_HOST=127.0.0.1`），改代码 0.2 秒生效。
+
+> ⚠️ **`compose.override.yaml` 只用于开发。** 生产环境必须显式指定文件，否则会变成热重载 + 挂载源码：
+> ```bash
+> docker compose -f compose.prod.yaml up -d
+> ```
+> 一旦命令里出现 `-f`，compose 就不自动加载 `compose.override.yaml`。
+
+### 3.3 本地开发（直连宿主机 MySQL 的建表）
 
 适合改代码时用（有 `--reload` 热重载）：
 
@@ -91,7 +135,7 @@ foreach ($f in Get-ChildItem migrations\*.sql | Sort-Object Name) {
 
 > **为什么用迁移文件而不是手写建表**：表结构有 20+ 列、6 次变更历史，手写必然与实际不符（README 之前那版就是典型例子）。迁移文件是 schema 的唯一真相。
 
-### 3.3 手机访问
+### 3.4 手机访问
 
 | 场景 | 做法 |
 |---|---|
@@ -99,6 +143,43 @@ foreach ($f in Get-ChildItem migrations\*.sql | Sort-Object Name) {
 | 异地（临时演示） | 内网穿透（如 cpolar），**但务必先确认 `DEBUG=false`、注册已关闭** |
 
 ⚠️ `--host 0.0.0.0`（Docker 里已默认）是手机能访问的前提；只绑 `127.0.0.1` 手机一定打不开。
+
+### 3.5 备份与恢复
+
+`compose.yaml` 里有一个 `backup` 服务：**启动时立刻备一份，之后每 24 小时一次，只保留最近 14 天。**
+
+```powershell
+docker compose logs backup          # 看每次备份的结果
+ls backups\                         # 备份文件在宿主机这个目录里
+```
+
+**备份文件**：`backups/job-tracker-YYYY-MM-DD.sql.gz`（几十 KB）。
+它由 `mysqldump --single-transaction` 生成——InnoDB 一致性快照，**不锁表、不影响你正在用**。
+
+**为什么要备份**（不是因为重启会丢数据——重启不会）：
+
+| 真实风险 | 说明 |
+|---|---|
+| **误操作** | 点错删除、写错 `DELETE`、手滑 `docker compose down -v` |
+| Docker 环境重置 | `docker system prune -a --volumes`、重置 Docker Desktop、重装 WSL |
+| 迁移 | 换电脑 / 搬到云服务器时，数据锁在 `docker_data.vhdx` 里，**没有 dump 就搬不走** |
+
+**恢复**（注意：`/backup` 只挂在 `backup` 容器上，所以要在那个容器里执行）：
+
+```powershell
+# 1. 建一个临时库验证（不要直接覆盖正式库！）
+docker compose exec db mysql -u root -p你的root密码 -e "CREATE DATABASE restore_check CHARACTER SET utf8mb4;"
+
+# 2. 把备份灌进去
+docker compose exec backup sh -c 'gunzip -c /backup/job-tracker-2026-11-24.sql.gz | mysql -h db -u root -p"$MYSQL_ROOT_PASSWORD" restore_check'
+
+# 3. 比对行数，确认无误后再决定是否覆盖正式库
+docker compose exec db mysql -u root -p你的root密码 -e "SELECT COUNT(*) FROM restore_check.jobs;"
+```
+
+> **原理**：`mysqldump` 默认不带 `CREATE DATABASE`，所以可以灌进任意库名——这就是为什么能先恢复到 `restore_check` 里检查，而不是直接毁掉正式数据。
+
+> **异地备份**：脚本只把备份放在同一块硬盘上。如果整块盘坏掉，备份和原数据一起没。建议每年手动拷一两次到网盘。
 
 ## 4. 接口
 
