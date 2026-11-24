@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <title>投递记录</title>
+  <link rel="stylesheet" href="/static-ui/style.css">
+</head>
+<body>
+
+<!-- ========== 启动中 ========== -->
+<!-- 默认显示它，登录页和主界面都隐藏。
+     否则刷新时会先闪一下登录表单（要等 /users/me 返回），看起来像"被登出了"。 -->
+<section id="view-boot" class="view boot-view">
+  <div class="boot-spinner" aria-label="加载中"></div>
+</section>
+
+<!-- ========== 登录 / 注册 ========== -->
+<section id="view-login" class="view" hidden>
+  <div class="login-card">
+    <h1>投递记录</h1>
+    <p class="sub">记录投递进度，评估岗位匹配度</p>
+
+    <!-- 登录 -->
+    <form id="login-form" autocomplete="on">
+      <label class="field">
+        <span>用户名</span>
+        <input name="name" type="text" autocomplete="username"
+               required minlength="2" maxlength="20" inputmode="text">
+      </label>
+
+      <label class="field">
+        <span>密码</span>
+        <input name="password" type="password" autocomplete="current-password"
+               required minlength="6" maxlength="64">
+      </label>
+
+      <p class="msg error" id="login-msg" hidden></p>
+      <button type="submit" class="primary" id="btn-login">登录</button>
+    </form>
+
+    <!-- 注册（受限开放：需要邀请码） -->
+    <form id="register-form" autocomplete="on" hidden>
+      <label class="field">
+        <span>用户名（2–20 字）</span>
+        <input name="name" type="text" autocomplete="username"
+               required minlength="2" maxlength="20">
+      </label>
+
+      <label class="field">
+        <span>密码（6–64 位）</span>
+        <input name="password" type="password" autocomplete="new-password"
+               required minlength="6" maxlength="64">
+      </label>
+
+      <label class="field">
+        <span>确认密码</span>
+        <input name="password2" type="password" autocomplete="new-password"
+               required minlength="6" maxlength="64">
+      </label>
+
+      <label class="field">
+        <span>邀请码</span>
+        <input name="code" type="text" autocomplete="off" placeholder="向管理员索取">
+      </label>
+
+      <p class="msg error" id="register-msg" hidden></p>
+      <button type="submit" class="primary" id="btn-register">注册并登录</button>
+    </form>
+
+    <button type="button" id="btn-toggle-mode" class="link">没有账号？用邀请码注册</button>
+  </div>
+</section>
+
+<!-- ========== 主界面 ========== -->
+<section id="view-app" class="view" hidden>
+  <header class="topbar">
+    <strong>投递记录</strong>
+    <div class="topbar-right">
+      <span id="whoami" class="whoami"></span>
+      <button id="btn-logout" class="ghost small">登出</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button id="btn-new" class="primary small">+ 新增</button>
+    <button id="btn-shot" class="ghost small" title="也可以直接 Ctrl+V 粘贴截图">截图导入</button>
+    <button id="btn-refresh" class="ghost small">刷新</button>
+    <select id="filter-status" class="small" aria-label="按状态筛选">
+      <option value="">全部状态</option>
+      <option value="待投">待投</option>
+      <option value="已投">已投</option>
+      <option value="预约面试">预约面试</option>
+      <option value="已面试">已面试</option>
+      <option value="已挂">已挂</option>
+    </select>
+  </div>
+  <input type="file" id="file-shot" accept="image/*" hidden>
+  <p class="toolbar-tip">截图后按 Ctrl+V 粘贴，或点「截图导入」，AI 自动填好岗位信息</p>
+
+  <!-- 筛选提示：让"正在筛选"这件事可见，避免误以为数据丢了 -->
+  <div class="filter-hint" id="filter-hint" hidden>
+    <span id="filter-hint-text"></span>
+    <button type="button" id="btn-clear-filter">清除筛选</button>
+  </div>
+
+  <main id="list" class="list" aria-live="polite"></main>
+
+  <nav class="pager" id="pager" hidden>
+    <button id="btn-prev" class="ghost small">上一页</button>
+    <span id="page-info" class="page-info"></span>
+    <button id="btn-next" class="ghost small">下一页</button>
+  </nav>
+</section>
+
+<!-- ========== 新增 / 编辑 ========== -->
+<dialog id="dlg-job" class="dialog">
+  <form id="job-form" method="dialog">
+    <h2 id="dlg-title">新增投递</h2>
+
+    <p class="msg ok" id="draft-hint" hidden></p>
+
+    <div class="grid2">
+      <label class="field">
+        <span>公司 *</span>
+        <input name="company" type="text" required maxlength="100">
+      </label>
+      <label class="field">
+        <span>岗位 *</span>
+        <input name="position" type="text" required maxlength="100">
+      </label>
+    </div>
+
+    <div class="grid2">
+      <label class="field">
+        <span>状态</span>
+        <select name="status">
+          <option value="待投">待投</option>
+          <option value="已投">已投</option>
+          <option value="预约面试">预约面试</option>
+          <option value="已面试">已面试</option>
+          <option value="已挂">已挂</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>来源</span>
+        <select name="source">
+          <option value="其他">其他</option>
+          <option value="本校">本校</option>
+          <option value="Boss直聘">Boss直聘</option>
+          <option value="自定义">自定义</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span>来源补充（平台名 / 内推人）</span>
+      <input name="source_detail" type="text" maxlength="100">
+    </label>
+
+    <div class="grid2">
+      <label class="field">
+        <span>薪资下限（千元/月）</span>
+        <input name="salary_min" type="number" min="0" max="1000" inputmode="numeric">
+      </label>
+      <label class="field">
+        <span>薪资上限（千元/月）</span>
+        <input name="salary_max" type="number" min="0" max="1000" inputmode="numeric">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>薪资备注</span>
+      <input name="salary_note" type="text" maxlength="50" placeholder="如：13薪 / 试用期八折">
+    </label>
+
+    <label class="field">
+      <span>岗位链接</span>
+      <input name="url" type="url" maxlength="500" inputmode="url" placeholder="https://">
+    </label>
+
+    <div class="grid2">
+      <label class="field">
+        <span>发布时间</span>
+        <input name="published_at" type="date">
+      </label>
+      <label class="field">
+        <span>下次面试时间</span>
+        <input name="next_interview_at" type="datetime-local">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>公司业务</span>
+      <input name="company_business" type="text" maxlength="200" placeholder="如：企业级 SaaS">
+    </label>
+
+    <label class="field">
+      <span>JD 原文（粘贴招聘文案，AI 分析要用）</span>
+      <textarea name="description" rows="6" placeholder="把 Boss 直聘 / 官网上的岗位描述整段粘进来"></textarea>
+    </label>
+
+    <label class="field">
+      <span>备注</span>
+      <textarea name="note" rows="3" placeholder="HR 说了什么、自己要注意什么"></textarea>
+    </label>
+
+    <p class="msg error" id="form-msg" hidden></p>
+
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="btn-cancel">取消</button>
+      <button type="submit" class="primary" id="btn-save">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static-ui/app.js"></script>
+</body>
+</html>
