@@ -14,6 +14,9 @@ venv/
 # 日志
 *.log
 
+# 数据库备份（含真实数据，不进版本库）
+backups/
+
 # 工具缓存
 .ruff_cache/
 .mypy_cache/
