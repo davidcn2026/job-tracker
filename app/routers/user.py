@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, token_expiry
 from app.core.security import generate_token, hash_password, token_hash, verify_password
 from app.crud import user as crud_user
 from app.db.session import get_database
@@ -27,6 +27,8 @@ async def login(
 
     token = generate_token()
     user.token = token_hash(token)
+    # 记首次过期时间；之后由 get_current_user 做滑动续期
+    user.token_expires_at = token_expiry()
     await db.commit()
 
     return Resp(data=TokenOut(token=token, user=UserOut.model_validate(user)))
@@ -59,6 +61,7 @@ async def register(
     # 直接发 token （省一次登录请求）
     token = generate_token()
     user.token = token_hash(token)
+    user.token_expires_at = token_expiry()
     await db.commit()
 
     return Resp(code=201, data=TokenOut(token=token,user=UserOut.model_validate(user)))

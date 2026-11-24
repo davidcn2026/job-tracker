@@ -16,6 +16,13 @@ class Settings(BaseSettings):
 
     debug: bool = False
 
+    # ---- 登录态有效期 ----
+    # token 多久不用就失效（天）。NULL 视为不过期，兼容历史 token。
+    token_ttl_days: int = 30
+    # 剩余有效期少于这个天数时，下一次请求自动续满。
+    # 只在快过期时才写库，避免每个请求都 UPDATE 一次 token_expires_at。
+    token_renew_window_days: int = 7
+
     # LLM（DeepSeek 兼容 OpenAI 协议）
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
