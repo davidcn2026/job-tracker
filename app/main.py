@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.exceptions import register_exception_handlers
-from app.routers import health, job, user
+from app.routers import assistant, health, job, user
 
 app = FastAPI(
     title="投递记录服务",
@@ -16,9 +16,28 @@ app = FastAPI(
 )
 register_exception_handlers(app)
 
+
+@app.middleware("http")
+async def no_cache_for_ui(request: Request, call_next):
+    """前端页面与资源强制每次向服务器校验。
+
+    不加这个头时，浏览器会对静态文件做**启发式缓存**（不给 Cache-Control 时的默认行为）。
+    后果很具体：改了 app.js 之后刷新页面，HTML 是新的、JS 还是旧的，
+    表现就是"按钮点了没反应"——排查半天以为是代码 bug。
+
+    加了 no-cache 后，浏览器每次都会带 If-None-Match 来问；
+    文件没变就返回 304（几乎没有开销），变了就拿到新的。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static-ui"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 app.include_router(health.router)
 app.include_router(job.router)
 app.include_router(user.router)
+app.include_router(assistant.router)
 
 # 本地静态资源（Swagger UI 的 js/css 已下载到 static/swagger/）
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"

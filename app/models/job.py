@@ -62,3 +62,11 @@ class Job(Base):
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     verdict: Mapped[str | None] = mapped_column(String(20))
+
+    @property
+    def has_description(self) -> bool:
+        """列表接口不返回 JD 全文，但前端需要知道"有没有 JD"。
+
+        有 JD 却没分数 = 后台正在分析（或分析失败），前端据此决定要不要轮询。
+        """
+        return bool((self.description or "").strip())

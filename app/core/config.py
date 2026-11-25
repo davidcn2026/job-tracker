@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-chat"
 
+    # ---- 助手唯一的工具：联网搜索 ----
+    # 留空 = 不启用搜索。此时助手会明确告诉用户"搜索未配置"，绝不编造结果。
+    # 支持 bocha（博查，国内直连、按量计费）和 tavily
+    search_provider: str = ""
+    search_api_key: str = ""
+
     @property
     def database_url(self) -> URL:
         return URL.create(

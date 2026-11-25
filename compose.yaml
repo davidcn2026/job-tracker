@@ -52,6 +52,12 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      # 助手的联网搜索工具。
+      # 注意：这里是**白名单**——.env 里有不等于容器能看到，
+      # 只有在这个列表里出现过的变量才会被注入容器。
+      # 忘了加会导致"改了 .env 但助手还说搜不到"（已踩过）。
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-}
+      SEARCH_API_KEY: ${SEARCH_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

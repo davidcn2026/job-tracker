@@ -84,3 +84,19 @@ async def save_analysis(db: AsyncSession, job: Job, result: AnalysisResult) -> J
     await db.commit()
     await db.refresh(job)
     return job
+
+
+async def clear_analysis(db: AsyncSession, job: Job) -> Job:
+    """作废已有的分析结果。
+
+    JD 改了之后旧分数就没有意义了（可能从 82 分掉到 45 分）。
+    清空四个字段 → 岗位回到"未分析"分组 → 由自动分析重新打分。
+    """
+    job.match_score = None
+    job.verdict = None
+    job.analysis = None
+    job.analyzed_at = None
+
+    await db.commit()
+    await db.refresh(job)
+    return job

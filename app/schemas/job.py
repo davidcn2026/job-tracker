@@ -62,6 +62,9 @@ class JobOut(BaseModel):
     match_score: int | None
     verdict: str | None = None
     analyzed_at: datetime | None
+    # 有没有 JD 原文（不返回全文，只返回布尔）。
+    # 前端靠它判断"该不该显示分析中"：有 JD 但没分数 = 后台正在分析，值得轮询。
+    has_description: bool = False
 
 
 class JobDetail(JobOut):

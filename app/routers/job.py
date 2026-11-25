@@ -1,4 +1,3 @@
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +10,7 @@ from app.models import User
 from app.schemas.job import JobDeleted, JobDetail, JobIn, JobListData, JobOut, JobUpdate
 from app.schemas.llm import JobDraft
 from app.schemas.response import Resp
+from app.services import auto_analyze
 from app.services.llm import LLMError, analyze_jd, extract_job_from_image
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
@@ -64,6 +64,12 @@ async def create_job(
         job = await crud_job.create_job(db, current_user.id, payload)
     except IntegrityError:
         raise HTTPException(status_code=409, detail="该公司下已有这个岗位") from None
+
+    # 录入即分析：用户不该为了拿到分数去点按钮。
+    # 有 JD 才排队；没简历时后台会自己跳过（拿别人的经历评判会失真）。
+    if (payload.description or "").strip():
+        auto_analyze.schedule(job.id, current_user.id)
+
     return Resp(code=201, data=JobDetail.model_validate(job))
 
 
@@ -108,6 +114,13 @@ async def update_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_database),
 ):
+    # JD 改了就作废旧分数：岗位可能从 82 分掉到 45 分，留着旧分是误导。
+    # 所以先取旧值比对，更新后再决定是否重算。
+    before = await crud_job.get_job(db, current_user.id, job_id)
+    if before is None:
+        raise HTTPException(status_code=404, detail=f"没有 id={job_id} 这条岗位")
+    old_description = (before.description or "").strip()
+
     try:
         job = await crud_job.update_job(db, current_user.id, job_id, payload)
     except IntegrityError:
@@ -115,6 +128,12 @@ async def update_job(
 
     if job is None:
         raise HTTPException(status_code=404, detail=f"没有 id={job_id} 这条岗位")
+
+    new_description = (job.description or "").strip()
+    if new_description and new_description != old_description:
+        await crud_job.clear_analysis(db, job)
+        auto_analyze.schedule(job.id, current_user.id)
+
     return Resp(data=JobDetail.model_validate(job))
 
 
@@ -136,39 +155,41 @@ async def analyze_job(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_database),
 ) -> Resp[JobDetail]:
-    """对已录入的岗位跑 AI 匹配分析，写入分数与投递建议档位。"""
+    """对已录入的岗位跑 AI 匹配分析，写入分数与投递建议档位。
 
-    # TODO(1/5) 查岗位
-    #   用 crud_job.get_job(db, current_user.id, job_id) 拿到 job
-    #   job is None → raise HTTPException(404, detail=f"没有 id={job_id} 这条岗位")
+    判断顺序是刻意安排的：
+      404 没这个岗位 → 422 没 JD → 422 没简历 → 429 太频繁 → 调模型 → 保存
+    越便宜的检查越靠前；尤其 429 必须在调模型之前，否则等于"先花钱再拒绝"。
+    """
     job = await crud_job.get_job(db, current_user.id, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"没有 id={job_id} 这条岗位")
 
-    # TODO(2/5) 没有 JD 原文就拒绝
-    #   条件：job.description 为空，或去掉空白后为空
-    #   → raise HTTPException(422, detail="这条记录没有 JD 原文，无法分析")
     if not job.description or not job.description.strip():
         raise HTTPException(status_code=422, detail="这条记录没有 JD 原文，无法分析")
 
-    # TODO(3/5) 防重复触发
-    #   job.analyzed_at 不为 None 时，算它距今多少秒
-    #   小于 10 秒 → raise HTTPException(429, detail="分析过于频繁，请 10 秒后再试")
-    #   注意：这一步必须在调 LLM 之前，否则等于"先花钱再拒绝"
-    if job.analyzed_at is not None:
-        elapsed = (datetime.now() - job.analyzed_at).total_seconds()
-        if elapsed < 10:
-            raise HTTPException(status_code=429, detail="分析过于频繁，请 10 秒后再试")
+    # 简历现在是"用户上传"的，不再是代码里写死的。
+    # 没有简历就不做分析：拿别人的经历评判你的岗位匹配度，结论毫无意义。
+    profile = (current_user.profile_text or "").strip()
+    if not profile:
+        raise HTTPException(
+            status_code=422,
+            detail="请先在右上角「简历」里上传你的简历，AI 才能做个性化匹配分析",
+        )
 
-    # TODO(4/5) 调模型
-    #   result = await analyze_jd(job.description)
-    #   用 try / except LLMError 包住
-    #   → raise HTTPException(503, detail="AI 分析暂时不可用，请稍后重试") from None
+    # 打分是幂等的：已经分析过就不再重算。
+    # 只有 JD 改动时（PATCH 里会清空 analyzed_at）才允许重新打分，
+    # 所以这个接口现在只用于"补跑"老数据，或自动分析失败后的手动兜底。
+    if job.analyzed_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="这个岗位已经打过分了。只有修改 JD 后才会重新分析，避免重复花钱。",
+        )
+
     try:
-        result = await analyze_jd(job.description)
+        result = await analyze_jd(job.description, profile)
     except LLMError:
         raise HTTPException(status_code=503, detail="AI 分析暂时不可用，请稍后重试") from None
 
-    # TODO(5/5) 保存并返回（下面两行已给出，不用改）
     job = await crud_job.save_analysis(db, job, result)
     return Resp(data=JobDetail.model_validate(job))
