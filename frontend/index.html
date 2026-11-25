@@ -79,6 +79,7 @@
     <strong>投递记录</strong>
     <div class="topbar-right">
       <span id="whoami" class="whoami"></span>
+      <button id="btn-profile" class="ghost small" title="AI 分析会读这份简历">简历</button>
       <button id="btn-logout" class="ghost small">登出</button>
     </div>
   </header>
@@ -97,7 +98,7 @@
     </select>
   </div>
   <input type="file" id="file-shot" accept="image/*" hidden>
-  <p class="toolbar-tip">截图后按 Ctrl+V 粘贴，或点「截图导入」，AI 自动填好岗位信息</p>
+  <p class="toolbar-tip">截图后回到这个页面按 <b>Ctrl+V</b>（点一下页面空白处，让焦点离开输入框），或点「截图导入」，AI 自动填好岗位信息</p>
 
   <!-- 筛选提示：让"正在筛选"这件事可见，避免误以为数据丢了 -->
   <div class="filter-hint" id="filter-hint" hidden>
@@ -107,11 +108,8 @@
 
   <main id="list" class="list" aria-live="polite"></main>
 
-  <nav class="pager" id="pager" hidden>
-    <button id="btn-prev" class="ghost small">上一页</button>
-    <span id="page-info" class="page-info"></span>
-    <button id="btn-next" class="ghost small">下一页</button>
-  </nav>
+  <!-- 助手入口：只在这个视图里出现（浮在列表右下角） -->
+  <button type="button" id="btn-assistant" class="fab" aria-label="打开助手">助手</button>
 </section>
 
 <!-- ========== 新增 / 编辑 ========== -->
@@ -215,8 +213,67 @@
   </form>
 </dialog>
 
-<div id="toast" class="toast" hidden></div>
+<!-- ========== 我的简历 ========== -->
+<dialog id="dlg-profile" class="dialog">
+  <form id="profile-form" method="dialog">
+    <h2>我的简历</h2>
 
+    <p class="msg" id="profile-status" hidden></p>
+
+    <p class="hint">
+      AI 岗位匹配分析会读这份简历。可以上传 PDF / DOCX / 图片，也可以直接粘贴文字。
+      解析结果请核对——机器可能认错字。
+    </p>
+
+    <div class="card-actions">
+      <button type="button" class="ghost small" id="btn-profile-upload">上传文件</button>
+      <input type="file" id="file-profile" accept=".pdf,.docx,.txt,.md,image/*" hidden>
+    </div>
+
+    <label class="field">
+      <span>简历文本（可直接编辑）</span>
+      <textarea name="text" rows="14" placeholder="把简历内容粘贴进来，或点上面的「上传文件」"></textarea>
+    </label>
+
+    <p class="msg error" id="profile-msg" hidden></p>
+
+    <div class="dialog-actions">
+      <button type="button" class="ghost" id="btn-profile-clear">清空</button>
+      <button type="button" class="ghost" id="btn-profile-cancel">取消</button>
+      <button type="submit" class="primary" id="btn-profile-save">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ========== 助手（独立视图，不是弹窗覆盖） ========== -->
+<!-- 用 view 而不是 dialog：助手是一个"页面"，有返回动作。
+     弹窗会盖住岗位列表，用户失去了"我在哪"的空间感。 -->
+<section id="view-assistant" class="view assistant-view" hidden>
+  <header class="assistant-head">
+    <button type="button" class="ghost small" id="btn-assistant-back">← 返回</button>
+    <div class="assistant-title">
+      <strong>助手</strong>
+      <span id="assistant-sub">岗位库管理员 · 能联网查公司</span>
+    </div>
+    <button type="button" class="ghost small" id="btn-assistant-clear">清空</button>
+  </header>
+
+  <div class="assistant-log" id="assistant-log"></div>
+
+  <div class="assistant-quick" id="assistant-quick">
+    <button type="button" class="ghost small" data-q="我的岗位库里哪些最值得先准备？">先准备哪些</button>
+    <button type="button" class="ghost small" data-q="按我现在的情况，接下来该做什么？">下一步做什么</button>
+    <button type="button" class="ghost small" data-q="我简历里最该补强的是什么？">补强建议</button>
+  </div>
+
+  <form id="assistant-form" class="assistant-input">
+    <input name="content" type="text" autocomplete="off" maxlength="2000"
+           placeholder="问点什么…（例如：沐瞳这家公司是做什么的）">
+    <button type="submit" class="primary small" id="btn-assistant-send">发送</button>
+  </form>
+</section>
+
+<div id="toast" class="toast" hidden></div>
 <script src="/static-ui/app.js"></script>
 </body>
 </html>

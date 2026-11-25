@@ -9,10 +9,14 @@
 
 "use strict";
 
+/* 前端版本标记。
+ * 排查"改了代码但界面没变"时，第一步就是确认浏览器到底加载了哪一版：
+ * 打开控制台，看这行日志的版本号对不对。 */
+const APP_VERSION = "2026-11-25 15:40（含简历导入）";
+
 const API = "/api/v1";
 const TOKEN_KEY = "jt_token";
 const USER_KEY = "jt_user";
-const PAGE_SIZE = 10;
 const FETCH_LIMIT = 100; // 后端 page_size 上限
 
 /* ---------- 状态徽章 / 建议徽章的类名映射 ---------- */
@@ -37,9 +41,10 @@ const state = {
   user: null,
   items: [],
   statusFilter: "",
-  page: 1,
   editId: null,
   analyzing: new Set(),
+  pollTimer: null,
+  pollCount: 0,
 };
 
 /* ---------- 小工具 ---------- */
@@ -132,6 +137,7 @@ function hideBoot() {
 
 function showApp() {
   hideBoot();
+  $("#view-assistant").hidden = true;
   $("#view-login").hidden = true;
   $("#view-app").hidden = false;
   $("#whoami").textContent = state.user ? state.user.name : "";
@@ -139,6 +145,7 @@ function showApp() {
 
 function showLogin() {
   hideBoot();
+  $("#view-assistant").hidden = true;
   $("#view-app").hidden = true;
   $("#view-login").hidden = false;
   setAuthMode("login");
@@ -153,7 +160,6 @@ function showLogin() {
  * 注意：筛选本身是"临时视图状态"，不是用户偏好，所以不跨会话保留。 */
 function resetUiState() {
   state.statusFilter = "";
-  state.page = 1;
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -269,20 +275,42 @@ function setAuthMode(mode) {
     : "没有账号？用邀请码注册";
 }
 
+/* 有 JD 但没分数的岗位 = 后台正在分析，前端自动轮询等它出分。
+ * 用户不需要点任何按钮。最多轮询 20 次（约 1 分钟），避免无限请求。 */
+function schedulePendingPoll() {
+  clearTimeout(state.pollTimer);
+
+  const pending = state.items.some((job) => job.has_description && job.match_score == null);
+  if (!pending) {
+    state.pollCount = 0;
+    return;
+  }
+  if (state.pollCount >= 20) return;
+
+  state.pollCount += 1;
+  state.pollTimer = setTimeout(() => refresh(true), 3000);
+}
+
 /* ---------- 数据加载 ---------- */
-async function refresh() {
+/* silent = true 用于后台轮询：不显示骨架屏，避免每次刷新闪一下 */
+async function refresh(silent = false) {
   const list = $("#list");
-  list.replaceChildren();
-  for (let i = 0; i < 3; i += 1) list.append(el("div", "skeleton"));
+
+  if (!silent) {
+    list.replaceChildren();
+    for (let i = 0; i < 3; i += 1) list.append(el("div", "skeleton"));
+  }
 
   try {
     const payload = await api(`/jobs?page=1&page_size=${FETCH_LIMIT}`);
     state.items = payload.data.list || [];
-    state.page = 1;
+    if (!silent) state.pollCount = 0;
     render();
   } catch (err) {
-    list.replaceChildren();
-    list.append(el("p", "empty", err.message));
+    if (!silent) {
+      list.replaceChildren();
+      list.append(el("p", "empty", err.message));
+    }
   }
 }
 
@@ -292,14 +320,45 @@ function filtered() {
   return state.items.filter((job) => job.status === state.statusFilter);
 }
 
+/* 岗位按匹配度分层。
+ * 分数区间与提示词里的分档完全一致——同一套标准，避免"模型说可以投、界面说别投"。
+ * 未分析的单列一组，它们需要先点「AI 分析」拿分数。 */
+const SCORE_BANDS = [
+  { key: "focus", label: "重点投递", min: 75, hint: "值得为它专门准备" },
+  { key: "consider", label: "可考虑", min: 65, hint: "准备一下再投" },
+  { key: "mass", label: "海投", min: 50, hint: "顺手投，别花太多精力" },
+  { key: "skip", label: "不建议", min: 0, hint: "缺核心能力，先放一放" },
+  { key: "none", label: "未分析", min: null, hint: "先点「AI 分析」拿到分数" },
+];
+
+function bandOf(job) {
+  if (job.match_score == null) return "none";
+  for (const band of SCORE_BANDS) {
+    if (band.min !== null && job.match_score >= band.min) return band.key;
+  }
+  return "skip";
+}
+
+function bandBlock(band, items, open) {
+  const box = el("details", "band");
+  box.open = open;
+
+  const summary = el("summary", "band-head");
+  summary.append(el("span", `band-title band-${band.key}`, band.label));
+  summary.append(el("span", "band-count", `${items.length} 个`));
+  summary.append(el("span", "band-hint", band.hint));
+  box.append(summary);
+
+  const body = el("div", "band-body");
+  for (const job of items) body.append(jobCard(job));
+  box.append(body);
+
+  return box;
+}
+
 function render() {
   const list = $("#list");
   const rows = filtered();
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  if (state.page > pages) state.page = pages;
-
-  const start = (state.page - 1) * PAGE_SIZE;
-  const pageRows = rows.slice(start, start + PAGE_SIZE);
 
   list.replaceChildren();
 
@@ -307,14 +366,20 @@ function render() {
     list.append(el("p", "empty",
       state.statusFilter ? "这个状态下没有记录" : "还没有记录，点「+ 新增」开始"));
   } else {
-    for (const job of pageRows) list.append(jobCard(job));
+    const buckets = new Map(SCORE_BANDS.map((band) => [band.key, []]));
+    for (const job of rows) buckets.get(bandOf(job)).push(job);
+
+    // 只渲染有内容的组；默认展开第一个非空组，其余折叠（手机上不会一屏铺满）
+    let opened = false;
+    for (const band of SCORE_BANDS) {
+      const items = buckets.get(band.key);
+      if (items.length === 0) continue;
+      list.append(bandBlock(band, items, !opened));
+      opened = true;
+    }
   }
 
-  const pager = $("#pager");
-  pager.hidden = rows.length <= PAGE_SIZE;
-  $("#page-info").textContent = `第 ${state.page} / ${pages} 页 · 共 ${rows.length} 条`;
-  $("#btn-prev").disabled = state.page <= 1;
-  $("#btn-next").disabled = state.page >= pages;
+  // 分层视图不用分页（分组 + 折叠已解决长列表问题）
 
   /* 筛选提示：只有真的在筛选时才出现，并给出"共几条、怎么取消" */
   const hint = $("#filter-hint");
@@ -325,6 +390,8 @@ function render() {
   } else {
     hint.hidden = true;
   }
+
+  schedulePendingPoll();
 }
 
 function jobCard(job) {
@@ -377,17 +444,24 @@ function jobCard(job) {
       row.append(el("span", null, `分析于 ${formatDateTime(job.analyzed_at)}`));
     }
     card.append(row);
+  } else if (job.has_description) {
+    // 有 JD 但没分数 = 后台正在分析（或失败待重试），给个明确的状态
+    const row = el("div", "card-meta");
+    row.append(el("span", "badge score", "分析中…"));
+    card.append(row);
   }
 
   /* 操作按钮 */
   const actions = el("div", "card-actions");
 
-  const btnAnalyze = el("button", "ghost small",
-    state.analyzing.has(job.id) ? "分析中…" : (job.analyzed_at ? "重新分析" : "AI 分析"));
-  // 注意：不要用 job.description 判断——列表响应（JobOut）不含 JD 全文。
-  // 缺 JD 时后端会返回 422，前端照常展示它的提示即可。
-  btnAnalyze.disabled = state.analyzing.has(job.id);
-  btnAnalyze.addEventListener("click", () => analyzeJob(job.id));
+  // 打分是幂等的：打过分的岗位不再提供"重新分析"，只有修改 JD 才会重算。
+  // 只有在"有 JD 但没分数"时才显示按钮——那是自动分析失败后的兜底入口。
+  if (job.match_score == null && job.has_description) {
+    const btnAnalyze = el("button", "ghost small", "分析");
+    btnAnalyze.disabled = state.analyzing.has(job.id);
+    btnAnalyze.addEventListener("click", () => analyzeJob(job.id));
+    actions.append(btnAnalyze);
+  }
 
   const btnEdit = el("button", "ghost small", "编辑");
   btnEdit.addEventListener("click", () => openForm(job));
@@ -395,7 +469,7 @@ function jobCard(job) {
   const btnDelete = el("button", "ghost small", "删除");
   btnDelete.addEventListener("click", () => removeJob(job));
 
-  actions.append(btnAnalyze, btnEdit, btnDelete);
+  actions.append(btnEdit, btnDelete);
   card.append(actions);
 
   /* 分析详情：原生 details，内容按需懒加载 */
@@ -539,6 +613,254 @@ async function importScreenshot(file) {
   }
 }
 
+/* ---------- 我的简历 ---------- */
+/* 和截图导入同一原则：解析 → 用户核对 → 保存。
+ * 解析可能错（扫描件、排版复杂、OCR 认错字），所以 upload 只填进编辑框，
+ * 必须用户点「保存」才真正写进数据库。 */
+
+function showProfileError(message) {
+  const box = $("#profile-msg");
+  box.textContent = message;
+  box.hidden = false;
+}
+
+function updateProfileStatus(profile) {
+  const box = $("#profile-status");
+  if (profile && profile.chars) {
+    box.className = "msg ok";
+    box.textContent = `当前简历 ${profile.chars} 字，更新于 ${formatDateTime(profile.updated_at)}`;
+  } else {
+    box.className = "msg error";
+    box.textContent = "还没有简历。没有简历时「AI 分析」会被拒绝。";
+  }
+  box.hidden = false;
+}
+
+async function openProfile() {
+  $("#profile-msg").hidden = true;
+  $("#profile-status").hidden = true;
+
+  const form = $("#profile-form");
+  form.reset();
+  $("#dlg-profile").showModal();
+
+  try {
+    const payload = await api("/users/me/profile");
+    const profile = payload.data;
+    form.elements.text.value = profile.text || "";
+    updateProfileStatus(profile);
+  } catch (err) {
+    showProfileError(err.message);
+  }
+}
+
+async function importProfileFile(file) {
+  if (!file) return;
+
+  const btn = $("#btn-profile-upload");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "解析中…";
+  $("#profile-msg").hidden = true;
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const payload = await api("/users/me/profile/import", { method: "POST", formData });
+    const result = payload.data;
+
+    $("#profile-form").elements.text.value = result.text;
+
+    const box = $("#profile-status");
+    box.className = "msg ok";
+    box.textContent = `已从「${result.filename}」解析出 ${result.chars} 字。请核对下面的文本，确认无误后点「保存」。`;
+    box.hidden = false;
+  } catch (err) {
+    showProfileError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const text = form.elements.text.value.trim();
+
+  $("#profile-msg").hidden = true;
+  if (!text) {
+    showProfileError("简历内容不能为空");
+    return;
+  }
+
+  const btn = $("#btn-profile-save");
+  btn.disabled = true;
+  btn.textContent = "保存中…";
+
+  try {
+    const payload = await api("/users/me/profile", { method: "PUT", body: { text } });
+    updateProfileStatus(payload.data);
+    $("#dlg-profile").close();
+    toast(`简历已保存（${payload.data.chars} 字）`);
+  } catch (err) {
+    showProfileError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存";
+  }
+}
+
+async function clearProfile() {
+  const ok = window.confirm("清空简历？清空后「AI 分析」会被拒绝，直到你重新上传。");
+  if (!ok) return;
+
+  try {
+    const payload = await api("/users/me/profile", { method: "DELETE" });
+    $("#profile-form").elements.text.value = "";
+    updateProfileStatus(payload.data);
+    toast("简历已清空");
+  } catch (err) {
+    showProfileError(err.message);
+  }
+}
+
+
+/* ---------- 助手（独立视图，不是弹窗） ---------- */
+let assistantBusy = false;
+
+function showAssistantView() {
+  hideBoot();
+  $("#view-login").hidden = true;
+  $("#view-app").hidden = true;
+  $("#view-assistant").hidden = false;
+}
+
+function closeAssistantView() {
+  $("#view-assistant").hidden = true;
+  $("#view-app").hidden = false;
+}
+
+/* 一条消息 = 头像 + 气泡 */
+function messageRow(role, content) {
+  const row = el("div", `msg-row ${role}`);
+  const avatar = el("div", `avatar ${role === "user" ? "me" : "ai"}`,
+    role === "user" ? "我" : "AI");
+  const bubble = el("div", `bubble ${role}`, content);
+  row.append(avatar, bubble);
+  return row;
+}
+
+/* 连续的 tool 消息合并成一个可折叠块：
+ * 一次回答里可能搜 2~3 次，如果每条都展开会把屏幕占满，
+ * 而大多数时候用户只关心结论，不关心搜了哪几个词。 */
+function toolBlock(tools) {
+  const box = el("details", "tool-block");
+  box.append(el("summary", null, `🔍 搜索了 ${tools.length} 次（点开看查了什么）`));
+
+  const items = el("div", "tool-items");
+  for (const tool of tools) {
+    items.append(el("div", "tool-item", tool.content));
+  }
+  box.append(items);
+  return box;
+}
+
+function renderAssistantMessages(messages) {
+  const log = $("#assistant-log");
+  log.replaceChildren();
+
+  if (messages.length === 0) {
+    log.append(el("p", "empty",
+      "问我什么都行：岗位库里先准备哪个、某家公司做什么、简历该补什么。"));
+    return;
+  }
+
+  let pendingTools = [];
+  const flushTools = () => {
+    if (pendingTools.length) {
+      log.append(toolBlock(pendingTools));
+      pendingTools = [];
+    }
+  };
+
+  for (const message of messages) {
+    if (message.role === "tool") {
+      pendingTools.push(message);
+      continue;
+    }
+    flushTools();
+    log.append(messageRow(message.role, message.content));
+  }
+  flushTools();
+
+  log.scrollTop = log.scrollHeight;
+}
+
+async function openAssistant() {
+  showAssistantView();
+  const log = $("#assistant-log");
+  log.replaceChildren(el("p", "empty", "加载中…"));
+
+  try {
+    const payload = await api("/assistant/messages");
+    renderAssistantMessages(payload.data);
+  } catch (err) {
+    log.replaceChildren(el("p", "empty", err.message));
+  }
+}
+
+async function sendAssistant(text) {
+  const content = String(text || "").trim();
+  if (!content || assistantBusy) return;
+
+  const log = $("#assistant-log");
+  const form = $("#assistant-form");
+  const sendBtn = $("#btn-assistant-send");
+
+  assistantBusy = true;
+  sendBtn.disabled = true;
+  sendBtn.textContent = "…";
+  form.elements.content.disabled = true;
+  form.elements.content.value = "";
+
+  log.append(messageRow("user", content));
+  const pending = el("div", "bubble assistant", "正在想…");
+  const pendingRow = el("div", "msg-row assistant");
+  pendingRow.append(el("div", "avatar ai", "AI"), pending);
+  log.append(pendingRow);
+  log.scrollTop = log.scrollHeight;
+
+  try {
+    await api("/assistant/messages", { method: "POST", body: { content } });
+    // 后端会插入 tool 消息（搜索记录），重新拉一次历史最准确
+    const history = await api("/assistant/messages");
+    renderAssistantMessages(history.data);
+  } catch (err) {
+    pending.className = "bubble tool";
+    pending.textContent = err.message;
+  } finally {
+    assistantBusy = false;
+    sendBtn.disabled = false;
+    sendBtn.textContent = "发送";
+    form.elements.content.disabled = false;
+    form.elements.content.focus();
+  }
+}
+
+async function clearAssistant() {
+  const ok = window.confirm("清空对话记录？岗位库和简历不受影响。");
+  if (!ok) return;
+
+  try {
+    await api("/assistant/messages", { method: "DELETE" });
+    renderAssistantMessages([]);
+    toast("对话已清空");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 /* ---------- 表单 ---------- */
 /* job  = 从列表点「编辑」时传入（有 id，会走 PATCH）
  * draft = 从截图识别出来的草稿（无 id，走 POST，且要提示用户核对） */
@@ -660,6 +982,11 @@ async function removeJob(job) {
 
 /* ---------- 启动 ---------- */
 async function boot() {
+  // 第一行就打印版本，方便一眼确认浏览器加载的是不是最新前端
+  console.info(
+    `[投递记录] 前端版本 ${APP_VERSION} | 简历功能: ${typeof openProfile === "function" ? "已加载" : "缺失（缓存旧版）"}`
+  );
+
   $("#login-form").addEventListener("submit", doLogin);
   $("#register-form").addEventListener("submit", doRegister);
   $("#btn-toggle-mode").addEventListener("click", () => {
@@ -670,6 +997,33 @@ async function boot() {
     if (first) first.focus();
   });
   $("#btn-logout").addEventListener("click", () => logout());
+
+  /* 我的简历 */
+  $("#btn-profile").addEventListener("click", openProfile);
+  $("#btn-profile-upload").addEventListener("click", () => $("#file-profile").click());
+  $("#file-profile").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    const file = input.files && input.files[0];
+    input.value = ""; // 清空，允许再选同一个文件
+    importProfileFile(file);
+  });
+  $("#profile-form").addEventListener("submit", saveProfile);
+  $("#btn-profile-cancel").addEventListener("click", () => $("#dlg-profile").close());
+  $("#btn-profile-clear").addEventListener("click", clearProfile);
+
+  /* 助手（全局唯一） */
+  $("#btn-assistant").addEventListener("click", openAssistant);
+  $("#btn-assistant-back").addEventListener("click", closeAssistantView);
+  $("#btn-assistant-clear").addEventListener("click", clearAssistant);
+  $("#assistant-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendAssistant(event.currentTarget.elements.content.value);
+  });
+  $("#assistant-quick").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-q]");
+    if (button) sendAssistant(button.dataset.q);
+  });
+
   $("#btn-new").addEventListener("click", () => openForm(null));
   $("#btn-refresh").addEventListener("click", refresh);
 
@@ -684,34 +1038,31 @@ async function boot() {
 
   document.addEventListener("paste", (event) => {
     if ($("#view-app").hidden) return;
-    // 别抢走用户在输入框里的正常粘贴
-    const tag = (event.target.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea") return;
 
     const items = event.clipboardData ? event.clipboardData.items : [];
-    for (const item of items) {
-      if (item.kind === "file" && item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) {
-          event.preventDefault();
-          importScreenshot(file);
-          return;
-        }
-      }
-    }
+    const imageItem = Array.from(items).find(
+      (item) => item.kind === "file" && item.type.startsWith("image/")
+    );
+
+    // 只有"剪贴板里确实是图片"时才拦截。
+    // 纯文字粘贴必须放行，否则会破坏用户在输入框里的正常粘贴；
+    // 反过来，图片不应该因为焦点在输入框就被忽略——那样用户会以为功能坏了。
+    if (!imageItem) return;
+
+    const file = imageItem.getAsFile();
+    if (!file) return;
+
+    event.preventDefault();
+    importScreenshot(file);
   });
   $("#btn-cancel").addEventListener("click", closeForm);
   $("#job-form").addEventListener("submit", submitForm);
-  $("#btn-prev").addEventListener("click", () => { state.page -= 1; render(); });
-  $("#btn-next").addEventListener("click", () => { state.page += 1; render(); });
   $("#filter-status").addEventListener("change", (event) => {
     state.statusFilter = event.currentTarget.value;
-    state.page = 1;
     render();
   });
   $("#btn-clear-filter").addEventListener("click", () => {
     state.statusFilter = "";
-    state.page = 1;
     $("#filter-status").value = "";
     render();
   });
