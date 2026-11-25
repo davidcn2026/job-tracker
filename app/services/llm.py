@@ -5,7 +5,7 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.schemas.llm import AnalysisResult, JobDraft
+from app.schemas.llm import AnalysisResult, JobDraft, ResumeOCR
 from app.services.image import prepare_images
 
 SYSTEM_PROMPT = """你是岗位匹配分析助手。根据【我的技能】判断【JD原文】是否值得投递。
@@ -86,20 +86,25 @@ EXTRACT_PROMPT = """你是招聘截图解析助手。从用户给的招聘页面
 """
 
 
-PROFILE_SUMMARY: str = """【目标岗位】AI 应用开发 / Python 后端开发（校招或实习）
-【学历】南昌航空大学 网络工程 本科，2027 届
+PROFILE_SUMMARY_REMOVED = None  # 占位：旧版把简历硬编码在这里，已改为 users.profile_text
 
-【语言与框架】Python 熟练（asyncio / async-await）；FastAPI（路由、依赖注入、中间件、全局异常处理）；Pydantic v2 校验；RESTful API 与 OpenAPI
-【数据存储】SQLAlchemy 2.0 异步 ORM（实体映射、条件/聚合/分页查询、多表关联、ForeignKey）；MySQL 8（建表、关联查询、索引基础）；Redis（缓存策略、key 设计、失效与 TTL）
-【认证与安全】JWT 认证链路（注册 / 登录 / Token 校验 / 改密）、密码加盐哈希、Depends 统一鉴权
-【AI 应用】LLM API 集成封装（Prompt 构造、超时重试、降级、结果缓存）；RAG（文本切分、向量化检索、ChromaDB）；Agent 工具调用与权限闸门
-【测试与工程】pytest + httpx 接口测试、unittest、Git / GitHub、Docker 镜像构建与部署、Linux 常用命令
 
-【项目一】Coding Agent Harness：从零实现可执行本地命令的编码 Agent。Agent Loop + 工具查表分发（bash/read_file/write_file/edit_file/glob 共 5 个）+ 三级权限闸门（静态 deny-list、上下文正则规则、人工确认）+ 四事件 hook 扩展点 + JSONL 审计日志。
-【项目二】新闻头条后端（前后端分离资讯平台）：FastAPI + SQLAlchemy 2.0 异步栈，routers/schemas/models/crud 分层，统一响应模型与全局异常处理器，JWT 完整认证链路，Redis 缓存热点数据，封装第三方大模型问答模块，pytest 接口测试，Docker 部署。
+# ===== 简历图片转录提示词 =====
+# 只做逐字转录，不做总结：简历原文才是匹配分析要用的原料，
+# 让模型顺便"提炼"会丢失细节（比如具体的项目技术栈）。
+RESUME_OCR_PROMPT = """你是简历文字转录助手。把这张简历图片里的内容逐字转录成纯文本，只输出 json。
 
-【明确边界】无大厂实习经历；深度学习仅学完《深度学习入门》前 5 章，无模型训练 / 微调实战；无高并发与分布式系统经验；无算法竞赛经历。
+输出字段：
+- text: 转录出的完整文本，保留原有分节（如「教育背景」「专业技能」「项目经历」），用换行分隔
+- confidence: 0-1 的数字，你对转录准确度的信心
+
+要求：
+1. 逐字转录，不要总结、不要改写、不要补充图上没有的内容
+2. 必须保留：学历与届别、技能关键词、项目/实习经历的名称与技术栈、时间范围
+3. 联系方式（手机、邮箱）可以省略
+4. 看不清的字写 [看不清]，不要猜测
 """
+
 
 
 async def call_llm(system: str, user: str) -> str:
@@ -131,8 +136,11 @@ async def call_llm(system: str, user: str) -> str:
     return content
 
 
-async def analyze_jd(jd: str) -> AnalysisResult:
+async def analyze_jd(jd: str, profile: str) -> AnalysisResult:
     """业务层：拼提示词 → 调模型 → 解析 JSON → 校验 → 返回结构。
+
+    profile 是**用户自己上传的简历文本**，不再是硬编码在代码里的摘要——
+    否则会拿别人的经历去评判你的岗位匹配度，结论毫无意义。
 
     失败一律抛 LLMError（含模型输出格式不对），由 router 翻译成 503。
     """
@@ -142,10 +150,14 @@ async def analyze_jd(jd: str) -> AnalysisResult:
     if not jd.strip():
         raise LLMError("JD 内容为空")
 
-    # 固定内容放在前面：SYSTEM_PROMPT + PROFILE_SUMMARY 每次都相同，
+    if not profile.strip():
+        raise LLMError("简历内容为空")
+
+    # 固定内容放在前面：SYSTEM_PROMPT + 简历每次都相同（同一用户），
     # 前缀稳定才能命中上下文缓存（命中后输入价格远低于未命中）。
     # JD 截断到 1500 字：岗位要求基本都在前半部分，可省 30%~50% 输入 token。
-    user_content = f"【我的技能】\n{PROFILE_SUMMARY}\n\n【JD原文】\n{jd[:1500]}"
+    # 简历截断到 6000 字：一份简历通常 2~4 KB，6000 字足够，也防有人贴一整本书。
+    user_content = f"【我的技能】\n{profile[:6000]}\n\n【JD原文】\n{jd[:1500]}"
 
     raw = await call_llm(SYSTEM_PROMPT, user_content)
 
@@ -295,3 +307,76 @@ def _merge_drafts(drafts: list[JobDraft]) -> JobDraft:
     pool = informative or drafts
     merged.confidence = min(d.confidence for d in pool)
     return merged
+
+
+async def extract_resume_from_image(image_bytes: bytes, mime: str) -> str:
+    """简历图片（拍照 / 截图）→ 逐字转录的文本。
+
+    复用 prepare_images：超长图会自动切片，每段转录后按顺序拼接。
+    """
+    if not settings.deepseek_api_key:
+        raise LLMError("未配置 DEEPSEEK_API_KEY，无法识别简历图片")
+
+    if not image_bytes:
+        raise LLMError("图片内容为空")
+
+    try:
+        parts = prepare_images(image_bytes, mime)
+    except Exception as e:
+        raise LLMError(f"图片无法解析：{e}") from e
+
+    total = len(parts)
+    tasks = []
+    for index, (content, part_mime) in enumerate(parts, start=1):
+        if total == 1:
+            note = "转录这张简历图片。"
+        else:
+            note = (
+                f"这是一张长图从上往下切出的第 {index}/{total} 段，"
+                "只转录本段出现的文字，不要推测其它段的内容。"
+            )
+        data_url = f"data:{part_mime};base64,{base64.b64encode(content).decode()}"
+        tasks.append(call_llm_vision(RESUME_OCR_PROMPT, note, data_url))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    chunks: list[str] = []
+    errors: list[str] = []
+    for item in results:
+        if isinstance(item, BaseException):
+            errors.append(str(item))
+            continue
+        try:
+            chunks.append(ResumeOCR.model_validate_json(item).text.strip())
+        except ValidationError as e:
+            errors.append(f"模型输出不符合格式: {e}")
+
+    if not chunks:
+        raise LLMError(errors[0] if errors else "模型没有返回可用结果")
+
+    merged = "\n".join(chunk for chunk in chunks if chunk)
+    if len(merged) < 30:
+        raise LLMError("这张图里没识别出有效的简历内容，换一张更清晰的试试")
+    return merged
+
+
+async def call_llm_tools(messages: list[dict], tools: list[dict] | None = None):
+    """带工具的多轮调用，返回原始 response。
+
+    与 call_llm 的区别：这里**不解析内容**，因为要读 `tool_calls` 来决定下一步。
+    编排逻辑在 services/assistant.py。
+    """
+    kwargs: dict = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "temperature": 0.3,
+        "timeout": 90,
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+
+    try:
+        return await _client.chat.completions.create(**kwargs)
+    except Exception as e:
+        raise LLMError(f"模型调用失败: {e}") from e

@@ -13,5 +13,8 @@ openai==3.55.1
 python-multipart==0.0.34
 # 图片预处理：校验尺寸、超长截图切片（模型限制每边 8192px）
 Pillow==13.0.0
+# 简历解析：PDF / DOCX
+pypdf==7.1.1
+python-docx==1.2.0
 
 

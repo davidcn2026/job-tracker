@@ -38,6 +38,16 @@ class AnalysisResult(BaseModel):
         return self
 
 
+class ResumeOCR(BaseModel):
+    """从简历图片（拍照 / 截图）里转录出来的文本。
+
+    只做"逐字转录"，不做总结改写 —— 简历原文才是分析要用的东西。
+    """
+
+    text: str = Field(min_length=1)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class JobDraft(BaseModel):
     """从截图（或粘贴文本）里抽出来的岗位草稿。
 
