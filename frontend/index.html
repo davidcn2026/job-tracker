@@ -263,6 +263,20 @@
   </form>
 </dialog>
 
+<!-- ========== 岗位详情（独立视图，不是弹窗） ========== -->
+<!-- 列表用来扫读，详情用来看内容：JD 原文、备注、分析全文都放这里。
+     用 view 而不是 dialog，因为它是"另一页"，有返回动作。 -->
+<section id="view-detail" class="view detail-view" hidden>
+  <header class="detail-head">
+    <button type="button" class="ghost small" id="btn-detail-back">← 返回</button>
+    <div class="detail-head-actions">
+      <button type="button" class="ghost small" id="btn-detail-edit">编辑</button>
+      <button type="button" class="ghost small" id="btn-detail-delete">删除</button>
+    </div>
+  </header>
+  <div class="detail-body" id="detail-body"></div>
+</section>
+
 <!-- ========== 助手（独立视图，不是弹窗覆盖） ========== -->
 <!-- 用 view 而不是 dialog：助手是一个"页面"，有返回动作。
      弹窗会盖住岗位列表，用户失去了"我在哪"的空间感。 -->

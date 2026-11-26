@@ -44,6 +44,8 @@ const state = {
   query: '',
   groupBy: 'score',
   activeGroup: 'all',
+  detailId: null,
+  detailJob: null,
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -138,19 +140,23 @@ function hideBoot() {
   if (boot) boot.hidden = true;
 }
 
-function showApp() {
+/* 统一视图切换：login / app / assistant / detail 四选一。
+ * 之前各函数手动把别的视图 hide 掉，加到第四个视图时容易漏，收敛成一个入口。 */
+function setView(name) {
   hideBoot();
-  $("#view-assistant").hidden = true;
-  $("#view-login").hidden = true;
-  $("#view-app").hidden = false;
+  $("#view-login").hidden = name !== "login";
+  $("#view-app").hidden = name !== "app";
+  $("#view-assistant").hidden = name !== "assistant";
+  $("#view-detail").hidden = name !== "detail";
+}
+
+function showApp() {
+  setView("app");
   $("#whoami").textContent = state.user ? state.user.name : "";
 }
 
 function showLogin() {
-  hideBoot();
-  $("#view-assistant").hidden = true;
-  $("#view-app").hidden = true;
-  $("#view-login").hidden = false;
+  setView("login");
   setAuthMode("login");
   $("#login-form").reset();
   $("#register-form").reset();
@@ -166,6 +172,8 @@ function resetUiState() {
   state.query = "";
   state.groupBy = "score";
   state.activeGroup = "all";
+  state.detailId = null;
+  state.detailJob = null;
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -534,6 +542,10 @@ function jobCard(job) {
     actions.append(btnAnalyze);
   }
 
+  const btnDetail = el("button", "primary small", "详情");
+  btnDetail.addEventListener("click", () => openDetail(job.id));
+  actions.append(btnDetail);
+
   const btnEdit = el("button", "ghost small", "编辑");
   btnEdit.addEventListener("click", () => openForm(job));
 
@@ -543,9 +555,8 @@ function jobCard(job) {
   actions.append(btnEdit, btnDelete);
   card.append(actions);
 
-  /* 分析详情：原生 details，内容按需懒加载 */
-  if (job.analyzed_at) card.append(analysisBlock(job));
-
+  // 分析详情不再折叠在卡片里（那会让一张卡片占满整屏），
+  // 改到「详情」页展示完整内容；卡片只留分数和档位用于扫读。
   return card;
 }
 
@@ -582,37 +593,6 @@ function renderAnalysisParts(data) {
 
 /* 列表接口不返回 analysis 全文（避免响应体过大），
  * 所以详情在用户展开时才请求单条详情接口。 */
-function analysisBlock(job) {
-  const box = el("details", "analysis");
-  box.append(el("summary", null, "查看分析详情"));
-  const body = el("div");
-  box.append(body);
-
-  const immediate = parseAnalysis(job.analysis);
-  if (immediate) {
-    body.append(...renderAnalysisParts(immediate));
-    return box;
-  }
-
-  let loaded = false;
-  box.addEventListener("toggle", async () => {
-    if (!box.open || loaded) return;
-    loaded = true;
-    body.replaceChildren(el("p", "empty", "加载中…"));
-    try {
-      const payload = await api(`/jobs/${job.id}`);
-      const data = parseAnalysis(payload.data.analysis);
-      body.replaceChildren();
-      if (data) body.append(...renderAnalysisParts(data));
-      else body.append(el("p", "empty", "这条记录还没有分析结果"));
-    } catch (err) {
-      loaded = false; // 允许重试
-      body.replaceChildren(el("p", "empty", err.message));
-    }
-  });
-
-  return box;
-}
 
 function formatDateTime(value) {
   if (!value) return "";
@@ -797,19 +777,134 @@ async function clearProfile() {
 }
 
 
+/* ---------- 岗位详情（独立视图） ---------- */
+/* 列表负责扫读，详情负责看内容：JD 原文、备注、分析全文都在这里。
+ * 列表接口不返回 JD 全文（JobOut 有意排除），所以进来要单独拉一次详情。 */
+async function openDetail(jobId) {
+  state.detailId = jobId;
+  setView("detail");
+
+  const body = $("#detail-body");
+  body.replaceChildren(el("p", "empty", "加载中…"));
+
+  try {
+    const payload = await api(`/jobs/${jobId}`);
+    state.detailJob = payload.data;
+    renderDetail(payload.data);
+  } catch (err) {
+    body.replaceChildren(el("p", "empty", err.message));
+  }
+}
+
+function closeDetail() {
+  state.detailId = null;
+  state.detailJob = null;
+  setView("app");
+}
+
+function detailSection(title, contentNode) {
+  const section = el("section", "detail-section");
+  section.append(el("h2", null, title));
+  section.append(contentNode);
+  return section;
+}
+
+function renderDetail(job) {
+  const body = $("#detail-body");
+  body.replaceChildren();
+
+  /* 标题行：公司 + 岗位 + 状态 */
+  const titleRow = el("div", "detail-title-row");
+  const title = el("div");
+  title.append(el("h1", null, job.company));
+  title.append(el("div", "detail-position", job.position));
+  titleRow.append(title);
+  titleRow.append(el("span", `badge ${STATUS_CLASS[job.status] || "st-pending"}`, job.status));
+  body.append(titleRow);
+
+  /* 事实清单 */
+  const facts = el("dl", "detail-facts");
+  const addFact = (label, value) => {
+    if (value === null || value === undefined || value === "") return;
+    const item = el("div");
+    item.append(el("dt", null, label));
+    item.append(el("dd", null, String(value)));
+    facts.append(item);
+  };
+
+  if (job.salary_min != null || job.salary_max != null) {
+    const note = job.salary_note ? `·${job.salary_note}` : "";
+    addFact("薪资", `${job.salary_min ?? "?"}-${job.salary_max ?? "?"}k${note}`);
+  }
+  addFact("渠道", job.source_detail ? `${job.source}·${job.source_detail}` : job.source);
+  addFact("发布", job.published_at);
+  addFact("下次面试", job.next_interview_at ? formatDateTime(job.next_interview_at) : null);
+  addFact("公司业务", job.company_business);
+  addFact("录入", formatDateTime(job.created_at));
+  if (facts.childNodes.length) body.append(facts);
+
+  /* 两类链接 */
+  const links = el("div", "detail-links");
+  if (job.apply_url) {
+    const apply = el("a", "link-apply", "去投递 ↗");
+    apply.href = job.apply_url;
+    apply.target = "_blank";
+    apply.rel = "noopener noreferrer";
+    links.append(apply);
+  }
+  if (job.url) {
+    const jd = el("a", "link-jd", "岗位详情页 ↗");
+    jd.href = job.url;
+    jd.target = "_blank";
+    jd.rel = "noopener noreferrer";
+    links.append(jd);
+  }
+  if (links.childNodes.length) body.append(links);
+
+  /* AI 结论 */
+  if (job.match_score != null) {
+    const scoreRow = el("div", "detail-score");
+    scoreRow.append(el("span", "badge score", `${job.match_score} 分`));
+    if (job.verdict) {
+      scoreRow.append(el("span", `badge ${VERDICT_CLASS[job.verdict] || "vd-apply"}`, job.verdict));
+    }
+    if (job.analyzed_at) {
+      scoreRow.append(el("span", "muted", `分析于 ${formatDateTime(job.analyzed_at)}`));
+    }
+    body.append(scoreRow);
+  }
+
+  /* JD 原文 —— 这是用户最想看的东西，放在正文第一块 */
+  body.append(detailSection(
+    "JD 原文",
+    job.description
+      ? el("p", "detail-pre", job.description)
+      : el("p", "empty", "这条记录没有 JD 原文，可以在「编辑」里补上")
+  ));
+
+  /* 备注 */
+  if (job.note) body.append(detailSection("备注", el("p", "detail-pre", job.note)));
+
+  /* AI 分析全文 */
+  const analysis = parseAnalysis(job.analysis);
+  if (analysis) {
+    const wrap = el("div", "analysis");
+    wrap.append(...renderAnalysisParts(analysis));
+    body.append(detailSection("AI 分析", wrap));
+  }
+
+  const spacer = el("div", "detail-spacer");
+  body.append(spacer);
+}
 /* ---------- 助手（独立视图，不是弹窗） ---------- */
 let assistantBusy = false;
 
 function showAssistantView() {
-  hideBoot();
-  $("#view-login").hidden = true;
-  $("#view-app").hidden = true;
-  $("#view-assistant").hidden = false;
+  setView("assistant");
 }
 
 function closeAssistantView() {
-  $("#view-assistant").hidden = true;
-  $("#view-app").hidden = false;
+  setView("app");
 }
 
 /* 一条消息 = 头像 + 气泡 */
@@ -1022,7 +1117,8 @@ async function submitForm(event) {
       toast("已新增");
     }
     closeForm();
-    await refresh();
+    await refresh(true);
+    if (state.detailId) await openDetail(state.detailId); // 正在看详情就刷新它
   } catch (err) {
     msg.textContent = err.message;
     msg.hidden = false;
@@ -1046,7 +1142,7 @@ async function removeJob(job) {
   try {
     await api(`/jobs/${job.id}`, { method: "DELETE" });
     toast("已删除");
-    await refresh();
+    await refresh(true);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1084,6 +1180,18 @@ async function boot() {
   $("#btn-profile-clear").addEventListener("click", clearProfile);
 
   /* 助手（全局唯一） */
+  /* 岗位详情 */
+  $("#btn-detail-back").addEventListener("click", closeDetail);
+  $("#btn-detail-edit").addEventListener("click", () => {
+    if (state.detailJob) openForm(state.detailJob);
+  });
+  $("#btn-detail-delete").addEventListener("click", async () => {
+    if (!state.detailJob) return;
+    const job = state.detailJob;
+    closeDetail();
+    await removeJob(job);
+  });
+
   $("#btn-assistant").addEventListener("click", openAssistant);
   $("#btn-assistant-back").addEventListener("click", closeAssistantView);
   $("#btn-assistant-clear").addEventListener("click", clearAssistant);
