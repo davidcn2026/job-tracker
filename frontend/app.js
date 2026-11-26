@@ -50,6 +50,7 @@ const state = {
   prepFilter: 'all',
   grading: new Set(),
   roundView: new Map(),
+  editing: new Set(),
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -200,6 +201,7 @@ function resetUiState() {
   state.prepFilter = "all";
   state.grading.clear();
   state.roundView = new Map();
+  state.editing.clear();
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -1301,6 +1303,10 @@ function practiceBlock(question, record) {
     const evaluation = round.evaluation;
     if (evaluation && evaluation.verdict) {
       box.append(el("p", "practice-verdict", evaluation.verdict));
+    } else {
+      // 早期记录没有逐轮快照，且已被后一轮覆盖，补不回来了。
+      // 说明一句，好过静默少一段（否则看起来像格式不统一）。
+      box.append(el("p", "practice-verdict muted", "（这一轮没有留下评估记录）"));
     }
   }
 
@@ -1349,31 +1355,60 @@ function resetButton(question, hash) {
  *   round === null → 回答"下一个问题"（新答案，提交即评估）
  *   round 有值     → 编辑历史某一轮（只存文字，不重算）
  */
+/* 一条回答的输入 / 编辑。
+ *
+ *   round === null → 回答"下一个问题"（新答案，提交即评估）
+ *   round 有值     → 历史轮次：**默认只读**，点「编辑」才出现输入框
+ *
+ * 为什么历史轮次默认收起编辑框：
+ *   之前编辑框常显且预填了同样的文字，页面上就出现
+ *   「我的回答 → AI 评估 → 又一份同样的我的回答」，看起来像重复。
+ *   只读显示回答、要靠按钮才进编辑，既省空间也不会让人误解。
+ */
 function answerForm(question, hash, round, roundIndex, grading, depth, finished) {
   const form = el("form", "practice-form");
   const isEdit = round !== null;
-  const draft = isEdit ? readDraft(hash, roundIndex) : null;
-  const stored = isEdit ? (round.answer || "") : "";
-  const dirtyFromDraft = draft !== null && draft !== stored;
-
-  if (dirtyFromDraft) {
-    form.append(el("p", "practice-warn", "有未保存的改动（上次离开时留下的）"));
-  }
-
-  const input = el("textarea", "practice-input");
-  input.rows = 3;
-  input.maxLength = 8000;
-  // 新问题一定空着；编辑历史才回填（并优先用草稿）
-  input.value = isEdit ? (dirtyFromDraft ? draft : stored) : "";
-  input.placeholder = isEdit
-    ? "修正这段回答（只改记录，不会重新评估）"
-    : "先自己答一遍，别急着看参考答案";
-  if (grading) input.disabled = true;
-  form.append(input);
-
   const actions = el("div", "practice-actions");
 
+  /* ---------- 历史轮次 ---------- */
   if (isEdit) {
+    const editKey = `${hash}:${roundIndex}`;
+    const stored = round.answer || "";
+    const draft = readDraft(hash, roundIndex);
+    const dirtyFromDraft = draft !== null && draft !== stored;
+    const editing = state.editing.has(editKey) || dirtyFromDraft;
+
+    /* 不在编辑态：只给一个入口按钮，回答本身由 practiceBlock 只读展示 */
+    if (!editing) {
+      const btn = el("button", "ghost small", "编辑这段回答");
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        state.editing.add(editKey);
+        refreshPracticeCard(question, hash);
+      });
+      actions.append(btn);
+      form.append(actions);
+      return form;
+    }
+
+    /* 编辑态 */
+    if (dirtyFromDraft) {
+      form.append(el("p", "practice-warn", "有未保存的改动（上次离开时留下的）"));
+    }
+
+    const input = el("textarea", "practice-input");
+    input.rows = 3;
+    input.maxLength = 8000;
+    input.value = dirtyFromDraft ? draft : stored;
+    input.placeholder = "修正这段回答（只改记录，不会重新评估）";
+    if (grading) input.disabled = true;
+    form.append(input);
+
+    const leaveEdit = () => {
+      state.editing.delete(editKey);
+      refreshPracticeCard(question, hash);
+    };
+
     const save = el("button", "primary small", "保存");
     save.type = "button";
     save.addEventListener("click", async () => {
@@ -1384,6 +1419,7 @@ function answerForm(question, hash, round, roundIndex, grading, depth, finished)
       }
       if (text === stored) {
         clearDraft(hash, roundIndex);
+        leaveEdit();
         showTopToast("没有改动");
         return;
       }
@@ -1395,6 +1431,7 @@ function answerForm(question, hash, round, roundIndex, grading, depth, finished)
           body: { round: roundIndex, answer: text },
         });
         clearDraft(hash, roundIndex);
+        state.editing.delete(editKey);
         await reloadAnswers();
         refreshPracticeCard(question, hash);
         showTopToast("已保存（不会重新评估）");
@@ -1410,8 +1447,7 @@ function answerForm(question, hash, round, roundIndex, grading, depth, finished)
     cancel.type = "button";
     cancel.addEventListener("click", () => {
       clearDraft(hash, roundIndex);
-      input.value = stored;
-      refreshPracticeCard(question, hash);
+      leaveEdit();
       showTopToast("已撤销改动");
     });
     actions.append(cancel);
@@ -1438,77 +1474,87 @@ function answerForm(question, hash, round, roundIndex, grading, depth, finished)
       if (text.trim() === stored) clearDraft(hash, roundIndex);
       else writeDraft(hash, roundIndex, text);
     });
-  } else {
-    const label = grading
-      ? "评估中…"
-      : finished
-        ? "重新练一遍"
-        : depth === 0
-          ? "提交并追问 1/3"
-          : `提交并追问 ${depth + 1}/3`;
 
-    const submit = el("button", "primary small", label);
-    submit.type = "submit";
-    submit.disabled = grading;
-    actions.append(submit);
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const text = input.value.trim();
-      if (!text) {
-        showTopToast("先写点东西再提交");
-        return;
-      }
-
-      /* 只锁这一道题，别的题可以继续做 */
-      state.grading.add(hash);
-      submit.disabled = true;
-      submit.textContent = "评估中…";
-      input.disabled = true;
-      const card = document.querySelector(`.q-card[data-hash="${hash}"]`);
-      if (card) card.classList.add("grading");
-
-      try {
-        const result = await api(`/jobs/${state.detailId}/answers`, {
-          method: "POST",
-          body: { question_hash: hash, answer: text },
-        });
-        state.answers.set(hash, result.data);
-
-        /* 关键顺序：先清"评估中"，再重渲染，否则新卡片仍是 disabled */
-        state.grading.delete(hash);
-        // 新追问出现 → 自动翻到最新那一轮
-        state.roundView.set(hash, (result.data.transcript || []).length - 1);
-
-        /* 只替换这一张卡片 + 滚动锚定：不整页重渲染，屏幕不跳 */
-        const current = document.querySelector(`.q-card[data-hash="${hash}"]`);
-        if (current) patchCard(current, question, result.data);
-
-        const covered = result.data.covered.length;
-        const total = result.data.total_points;
-        showTopToast(
-          result.data.next_question
-            ? `已评估：覆盖 ${covered}/${total} · 新追问已就绪`
-            : `已评估：覆盖 ${covered}/${total} · 本题已练完`
-        );
-      } catch (err) {
-        state.grading.delete(hash);
-        if (card) card.classList.remove("grading");
-        toast(err.message, true);
-        submit.disabled = false;
-        submit.textContent = "重试";
-        input.disabled = false;
-      }
-    });
+    form.append(actions);
+    return form;
   }
+
+  /* ---------- 回答新问题（原题或未答的追问） ---------- */
+  const input = el("textarea", "practice-input");
+  input.rows = 3;
+  input.maxLength = 8000;
+  input.value = "";   // 新问题永远是空的
+  input.placeholder = "先自己答一遍，别急着看参考答案";
+  if (grading) input.disabled = true;
+  form.append(input);
+
+  const label = grading
+    ? "评估中…"
+    : finished
+      ? "重新练一遍"
+      : depth === 0
+        ? "提交并追问 1/3"
+        : `提交并追问 ${depth + 1}/3`;
+
+  const submit = el("button", "primary small", label);
+  submit.type = "submit";
+  submit.disabled = grading;
+  actions.append(submit);
 
   form.append(actions);
 
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) {
+      showTopToast("先写点东西再提交");
+      return;
+    }
+
+    /* 只锁这一道题，别的题可以继续做 */
+    state.grading.add(hash);
+    submit.disabled = true;
+    submit.textContent = "评估中…";
+    input.disabled = true;
+    const card = document.querySelector(`.q-card[data-hash="${hash}"]`);
+    if (card) card.classList.add("grading");
+
+    try {
+      const result = await api(`/jobs/${state.detailId}/answers`, {
+        method: "POST",
+        body: { question_hash: hash, answer: text },
+      });
+      state.answers.set(hash, result.data);
+
+      /* 关键顺序：先清"评估中"，再重渲染，否则新卡片仍是 disabled */
+      state.grading.delete(hash);
+      // 新追问出现 → 自动翻到最新那一轮
+      state.roundView.set(hash, (result.data.transcript || []).length - 1);
+
+      /* 只替换这一张卡片 + 滚动锚定：不整页重渲染，屏幕不跳 */
+      const current = document.querySelector(`.q-card[data-hash="${hash}"]`);
+      if (current) patchCard(current, question, result.data);
+
+      const covered = result.data.covered.length;
+      const total = result.data.total_points;
+      showTopToast(
+        result.data.next_question
+          ? `已评估：覆盖 ${covered}/${total} · 新追问已就绪`
+          : `已评估：覆盖 ${covered}/${total} · 本题已练完`
+      );
+    } catch (err) {
+      state.grading.delete(hash);
+      if (card) card.classList.remove("grading");
+      toast(err.message, true);
+      submit.disabled = false;
+      submit.textContent = "重试";
+      input.disabled = false;
+    }
+  });
 
   return form;
 }
 
-/* 重新拉一次作答记录（改了某一轮之后要同步） */
 async function reloadAnswers() {
   if (!state.detailId) return;
   const answers = await api(`/jobs/${state.detailId}/answers`);
