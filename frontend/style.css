@@ -1246,3 +1246,40 @@ button.link:hover { filter: brightness(1.15); }
 .q-points-box > summary::before { content: "\25B8 "; }
 .q-points-box[open] > summary::before { content: "\25BE "; }
 .q-points-box > .q-points { margin-top: 6px; }
+
+/* ============ 追问视图里的「原题」上下文 ============ */
+/* 翻到第 2 层追问时，依据/关键点/参考答案/可能的追问都属于**原题**，
+   必须收起来，否则用户会以为它们在说当前这个追问。
+   原题本身收成一行摘要，需要上下文时点开。 */
+.q-origin > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--muted);
+  font-size: .78rem;
+  padding: 2px 0;
+}
+.q-origin > summary::-webkit-details-marker { display: none; }
+.q-origin > summary::before { content: "\25B8 "; }
+.q-origin[open] > summary::before { content: "\25BE "; }
+.q-origin > .q-text {
+  margin-top: 6px;
+  font-size: .88rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+/* 「可能的追问」也折叠：它同样提前暴露了面试官的下一层意图 */
+.q-follow > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--accent);
+  font-size: .76rem;
+  padding: 2px 0;
+}
+.q-follow > summary::-webkit-details-marker { display: none; }
+.q-follow > summary::before { content: "\25B8 "; }
+.q-follow[open] > summary::before { content: "\25BE "; }
+.q-follow > .q-followup { margin-top: 4px; }

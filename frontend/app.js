@@ -1061,9 +1061,31 @@ function renderInterviewPrep(job) {
   return wrap;
 }
 
+/* 当前正在看第几轮。practiceBlock 和 questionCard 都要用，所以抽出来。 */
+function currentRoundIndex(hash, rounds) {
+  const pendingIndex = rounds.findIndex((item) => !item.answer);
+  const lastIndex = rounds.length - 1;
+  let index = state.roundView.get(hash);
+  if (index === undefined || index > lastIndex) {
+    index = pendingIndex >= 0 ? pendingIndex : lastIndex;
+    state.roundView.set(hash, index);
+  }
+  return index;
+}
+
+/* 一张题卡。
+ *
+ * **依据 / 关键点 / 参考答案 / 可能的追问 只属于原题**，所以只在「原题」
+ * 那一轮显示。之前它们常显在轮次导航上方，用户在翻到第 2 层追问时，
+ * 会以为这些要点是在说当前这个追问 —— 这是会误导人的。
+ * 翻到追问轮次时，原题收成一行「原题：…」放上下文，需要时点开。 */
 function questionCard(question, record) {
   const status = record?.status || "untried";
   const hash = questionHash(question.question);
+  const rounds = record?.transcript || [];
+  const viewIndex = rounds.length ? currentRoundIndex(hash, rounds) : 0;
+  const onOrigin = viewIndex === 0;
+
   const card = el("div", `q-card q-${question.your_status}`);
   if (state.grading.has(hash)) card.classList.add("grading");
   card.dataset.hash = hash;
@@ -1079,45 +1101,54 @@ function questionCard(question, record) {
   if (hasDraft(hash)) head.append(el("span", "draft-badge", "未保存"));
   card.append(head);
 
-  card.append(el("p", "q-text", question.question));
+  if (onOrigin) {
+    /* ---- 原题视图：题目 + 全套元信息 ---- */
+    card.append(el("p", "q-text", question.question));
 
-  /* 依据 / 为什么问 默认折叠。
-     这两条是"关于题目的元信息"，依据常常是一整段简历或 JD 原句，
-     展开能占掉半屏；而用户真正要看的是题目本身和关键点。 */
-  if (question.basis_quote || question.why_asked) {
-    const meta = el("details", "q-meta");
-    meta.append(el("summary", null,
-      `依据 · ${BASIS_LABEL[question.basis] || question.basis}`));
-    if (question.basis_quote) {
-      meta.append(el("p", "q-quote", question.basis_quote));
+    /* 依据 / 为什么问 默认折叠：依据常常是一整段简历或 JD 原句 */
+    if (question.basis_quote || question.why_asked) {
+      const meta = el("details", "q-meta");
+      meta.append(el("summary", null,
+        `依据 · ${BASIS_LABEL[question.basis] || question.basis}`));
+      if (question.basis_quote) {
+        meta.append(el("p", "q-quote", question.basis_quote));
+      }
+      if (question.why_asked) {
+        meta.append(el("p", "q-why", `为什么问：${question.why_asked}`));
+      }
+      card.append(meta);
     }
-    if (question.why_asked) {
-      meta.append(el("p", "q-why", `为什么问：${question.why_asked}`));
+
+    /* 关键点：默认折叠但摘要带数字。
+       摊开有两个问题：占 12~15 行；而且答题前就把答案要点看了。 */
+    if (question.key_points?.length) {
+      const pointsBox = el("details", "q-points-box");
+      pointsBox.append(el("summary", null, keyPointsSummary(question, record)));
+      pointsBox.append(renderKeyPoints(question.key_points, record));
+      card.append(pointsBox);
     }
-    card.append(meta);
-  }
 
-  /* 关键点：默认折叠，但**摘要上带数字**。
-     不折叠的两个问题：
-       1. 5 条要点在手机上就是 12~15 行，比"依据"还占地方；
-       2. 更严重——它列在输入框上方，答题前就把答案要点给看了，
-          那就不是 recall 练习，而是看着答案抄。
-     摘要写"覆盖 2/5 · 说错 1"，一眼知道练得怎么样，明细点开再看。 */
-  if (question.key_points?.length) {
-    const pointsBox = el("details", "q-points-box");
-    pointsBox.append(el("summary", null, keyPointsSummary(question, record)));
-    pointsBox.append(renderKeyPoints(question.key_points, record));
-    card.append(pointsBox);
-  }
+    /* 参考答案默认收起：面试前想先自测 */
+    const answer = el("details", "q-answer");
+    answer.append(el("summary", null, "看参考答案"));
+    answer.append(el("p", "q-answer-text", question.reference_answer));
+    card.append(answer);
 
-  /* 参考答案默认收起：面试前想先自测 */
-  const answer = el("details", "q-answer");
-  answer.append(el("summary", null, "看参考答案"));
-  answer.append(el("p", "q-answer-text", question.reference_answer));
-  card.append(answer);
-
-  if (question.follow_up) {
-    card.append(el("p", "q-followup", `可能的追问：${question.follow_up}`));
+    if (question.follow_up) {
+      const follow = el("details", "q-follow");
+      follow.append(el("summary", null, "可能的追问"));
+      follow.append(el("p", "q-followup", question.follow_up));
+      card.append(follow);
+    }
+  } else {
+    /* ---- 追问视图：只留原题作为上下文，元信息全部隐藏 ---- */
+    const origin = el("details", "q-origin");
+    const brief = question.question.length > 34
+      ? `${question.question.slice(0, 34)}…`
+      : question.question;
+    origin.append(el("summary", null, `原题：${brief}`));
+    origin.append(el("p", "q-text", question.question));
+    card.append(origin);
   }
 
   card.append(practiceBlock(question, record));
@@ -1278,16 +1309,8 @@ function practiceBlock(question, record) {
     return box;
   }
 
-  const pendingIndex = rounds.findIndex((item) => !item.answer);
   const lastIndex = rounds.length - 1;
-
-  let viewIndex = state.roundView.get(hash);
-  if (viewIndex === undefined || viewIndex > lastIndex) {
-    // 有未答的追问就停在它上面，否则停在最后一轮
-    viewIndex = pendingIndex >= 0 ? pendingIndex : lastIndex;
-    state.roundView.set(hash, viewIndex);
-  }
-
+  const viewIndex = currentRoundIndex(hash, rounds);
   const round = rounds[viewIndex];
   const isPending = !round.answer;
 
@@ -1325,7 +1348,10 @@ function practiceBlock(question, record) {
     ask.append(el("p", "practice-ask-text", round.question));
     box.append(ask);
   } else {
-    box.append(el("p", "practice-q", `问：${round.question}`));
+    // 原题那一轮：卡片顶部已经显示过题目，这里不重复
+    if (viewIndex > 0) {
+      box.append(el("p", "practice-q", `问：${round.question}`));
+    }
 
     const answerBox = el("div", "practice-answer");
     answerBox.append(el("span", "practice-answer-label",
