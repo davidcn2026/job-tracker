@@ -1062,29 +1062,29 @@ function renderInterviewPrep(job) {
 }
 
 /* 当前正在看第几轮。practiceBlock 和 questionCard 都要用，所以抽出来。 */
-function currentRoundIndex(hash, rounds) {
-  const pendingIndex = rounds.findIndex((item) => !item.answer);
-  const lastIndex = rounds.length - 1;
-  let index = state.roundView.get(hash);
-  if (index === undefined || index > lastIndex) {
-    index = pendingIndex >= 0 ? pendingIndex : lastIndex;
-    state.roundView.set(hash, index);
-  }
-  return index;
+/* 把作答记录拆成两半：
+ *   origin    原题那一答（transcript[0]）
+ *   followups 真正的追问轮次（transcript[1:]）
+ * 原题**不是一个轮次**：依据/关键点/参考答案/可能的追问只对它存在，
+ * 追问没有自己的参考答案。所以原题固定当卡片标题，轮次编号只数追问。
+ */
+function splitRounds(record) {
+  const transcript = record?.transcript || [];
+  return { origin: transcript[0] || null, followups: transcript.slice(1) };
 }
 
 /* 一张题卡。
  *
- * **依据 / 关键点 / 参考答案 / 可能的追问 只属于原题**，所以只在「原题」
- * 那一轮显示。之前它们常显在轮次导航上方，用户在翻到第 2 层追问时，
- * 会以为这些要点是在说当前这个追问 —— 这是会误导人的。
- * 翻到追问轮次时，原题收成一行「原题：…」放上下文，需要时点开。 */
+ * 布局原则：
+ *   1. 原题 = 卡片标题，永远显示（它就是"这道题在问什么"）
+ *   2. 四类元信息（依据/关键点/参考答案/可能的追问）只属于原题，跟在标题下
+ *   3. 追问轮次统一格式：追问正文 + 我的回答 + 当时评估 + 输入或编辑
+ *   4. 原题那一答收成「我当时的回答」，需要复习时点开
+ */
 function questionCard(question, record) {
   const status = record?.status || "untried";
   const hash = questionHash(question.question);
-  const rounds = record?.transcript || [];
-  const viewIndex = rounds.length ? currentRoundIndex(hash, rounds) : 0;
-  const onOrigin = viewIndex === 0;
+  const { origin } = splitRounds(record);
 
   const card = el("div", `q-card q-${question.your_status}`);
   if (state.grading.has(hash)) card.classList.add("grading");
@@ -1101,54 +1101,54 @@ function questionCard(question, record) {
   if (hasDraft(hash)) head.append(el("span", "draft-badge", "未保存"));
   card.append(head);
 
-  if (onOrigin) {
-    /* ---- 原题视图：题目 + 全套元信息 ---- */
-    card.append(el("p", "q-text", question.question));
+  /* 原题正文 = 卡片标题 */
+  card.append(el("p", "q-text", question.question));
 
-    /* 依据 / 为什么问 默认折叠：依据常常是一整段简历或 JD 原句 */
-    if (question.basis_quote || question.why_asked) {
-      const meta = el("details", "q-meta");
-      meta.append(el("summary", null,
-        `依据 · ${BASIS_LABEL[question.basis] || question.basis}`));
-      if (question.basis_quote) {
-        meta.append(el("p", "q-quote", question.basis_quote));
-      }
-      if (question.why_asked) {
-        meta.append(el("p", "q-why", `为什么问：${question.why_asked}`));
-      }
-      card.append(meta);
+  /* 依据 / 为什么问 默认折叠：依据常常是一整段简历或 JD 原句 */
+  if (question.basis_quote || question.why_asked) {
+    const meta = el("details", "q-meta");
+    meta.append(el("summary", null,
+      `依据 · ${BASIS_LABEL[question.basis] || question.basis}`));
+    if (question.basis_quote) {
+      meta.append(el("p", "q-quote", question.basis_quote));
     }
-
-    /* 关键点：默认折叠但摘要带数字。
-       摊开有两个问题：占 12~15 行；而且答题前就把答案要点看了。 */
-    if (question.key_points?.length) {
-      const pointsBox = el("details", "q-points-box");
-      pointsBox.append(el("summary", null, keyPointsSummary(question, record)));
-      pointsBox.append(renderKeyPoints(question.key_points, record));
-      card.append(pointsBox);
+    if (question.why_asked) {
+      meta.append(el("p", "q-why", `为什么问：${question.why_asked}`));
     }
+    card.append(meta);
+  }
 
-    /* 参考答案默认收起：面试前想先自测 */
-    const answer = el("details", "q-answer");
-    answer.append(el("summary", null, "看参考答案"));
-    answer.append(el("p", "q-answer-text", question.reference_answer));
-    card.append(answer);
+  /* 关键点：默认折叠但摘要带数字。
+     摊开有两个问题：占 12~15 行；而且答题前就把答案要点看了。 */
+  if (question.key_points?.length) {
+    const pointsBox = el("details", "q-points-box");
+    pointsBox.append(el("summary", null, keyPointsSummary(question, record)));
+    pointsBox.append(renderKeyPoints(question.key_points, record));
+    card.append(pointsBox);
+  }
 
-    if (question.follow_up) {
-      const follow = el("details", "q-follow");
-      follow.append(el("summary", null, "可能的追问"));
-      follow.append(el("p", "q-followup", question.follow_up));
-      card.append(follow);
-    }
-  } else {
-    /* ---- 追问视图：只留原题作为上下文，元信息全部隐藏 ---- */
-    const origin = el("details", "q-origin");
-    const brief = question.question.length > 34
-      ? `${question.question.slice(0, 34)}…`
-      : question.question;
-    origin.append(el("summary", null, `原题：${brief}`));
-    origin.append(el("p", "q-text", question.question));
-    card.append(origin);
+  /* 参考答案默认收起：面试前想先自测 */
+  const answer = el("details", "q-answer");
+  answer.append(el("summary", null, "看参考答案"));
+  answer.append(el("p", "q-answer-text", question.reference_answer));
+  card.append(answer);
+
+  /* 可能的追问也收起：它提前暴露面试官下一层的意图 */
+  if (question.follow_up) {
+    const follow = el("details", "q-follow");
+    follow.append(el("summary", null, "可能的追问"));
+    follow.append(el("p", "q-followup", question.follow_up));
+    card.append(follow);
+  }
+
+  /* 原题那一答：收起来，复习时点开，也能就地改（改文字不重算） */
+  if (origin && origin.answer) {
+    const originBox = el("details", "q-origin");
+    originBox.append(el("summary", null,
+      origin.edited ? "我当时的回答（原题 · 已修改）" : "我当时的回答（原题）"));
+    originBox.append(el("p", "practice-a", origin.answer));
+    originBox.append(answerForm(question, hash, origin, 0, state.grading.has(hash), 0, false));
+    card.append(originBox);
   }
 
   card.append(practiceBlock(question, record));
@@ -1292,10 +1292,12 @@ document.addEventListener("visibilitychange", () => {
    3. 改历史轮次要手动点保存，失焦时给硬弹窗确认——手机误触太多。
    4. 没保存的改动写进 localStorage，退出也不丢，回来时提醒。
 */
+/* 练习区：只处理**追问轮次**。
+ * 原题那一答归 questionCard 的「我当时的回答」管，这里不掺和。
+ */
 function practiceBlock(question, record) {
   const box = el("div", "practice");
   const hash = questionHash(question.question);
-  const rounds = record?.transcript || [];
   const grading = state.grading.has(hash);
 
   if (!question.key_points?.length) {
@@ -1303,19 +1305,36 @@ function practiceBlock(question, record) {
     return box;
   }
 
-  /* 从没练过 → 直接给输入框（第 0 轮就是原题） */
-  if (!rounds.length) {
+  const { followups } = splitRounds(record);
+
+  /* 还没答过原题 → 输入框回答原题 */
+  if (!followups.length && !(record?.transcript || []).length) {
     box.append(answerForm(question, hash, null, null, grading, 0, false));
     return box;
   }
 
-  const lastIndex = rounds.length - 1;
-  const viewIndex = currentRoundIndex(hash, rounds);
-  const round = rounds[viewIndex];
+  /* 原题答了但没有追问（第 0 层就收口） */
+  if (!followups.length) {
+    box.append(el("p", "hint", "这道题没有追问。点「重新练一遍」可以从头再来。"));
+    box.append(resetButton(question, hash));
+    return box;
+  }
+
+  const pendingIndex = followups.findIndex((item) => !item.answer);
+  const lastIndex = followups.length - 1;
+
+  let viewIndex = state.roundView.get(hash);
+  if (viewIndex === undefined || viewIndex > lastIndex) {
+    // 有未答的追问就停在它上面，否则停在最后一轮
+    viewIndex = pendingIndex >= 0 ? pendingIndex : lastIndex;
+    state.roundView.set(hash, viewIndex);
+  }
+
+  const round = followups[viewIndex];
   const isPending = !round.answer;
 
-  /* 多于一轮才显示导航 */
-  if (rounds.length > 1) {
+  /* 导航只数追问，不把原题算进去 */
+  if (followups.length > 1) {
     const nav = el("div", "round-nav");
 
     const prev = el("button", "ghost small", "←");
@@ -1327,7 +1346,7 @@ function practiceBlock(question, record) {
     });
 
     const label = el("span", "round-label",
-      `${LAYER_NAME[round.layer] || "追问"}（${viewIndex + 1}/${rounds.length}）`);
+      `${LAYER_NAME[round.layer] || "追问"}（${viewIndex + 1}/${followups.length}）`);
 
     const next = el("button", "ghost small", "→");
     next.type = "button";
@@ -1341,17 +1360,14 @@ function practiceBlock(question, record) {
     box.append(nav);
   }
 
-  /* 这一轮问了什么 */
+  /* 这一轮追问的正文 */
   if (isPending) {
     const ask = el("div", "practice-ask");
     ask.append(el("span", "practice-ask-layer", LAYER_NAME[round.layer] || "追问"));
     ask.append(el("p", "practice-ask-text", round.question));
     box.append(ask);
   } else {
-    // 原题那一轮：卡片顶部已经显示过题目，这里不重复
-    if (viewIndex > 0) {
-      box.append(el("p", "practice-q", `问：${round.question}`));
-    }
+    box.append(el("p", "practice-q", `问：${round.question}`));
 
     const answerBox = el("div", "practice-answer");
     answerBox.append(el("span", "practice-answer-label",
@@ -1372,37 +1388,15 @@ function practiceBlock(question, record) {
       }
     }
 
-    box.append(answerForm(question, hash, round, viewIndex, grading, 0, false));
+    /* 编辑历史轮次：roundIndex 用 transcript 里的真实下标（追问从 1 开始） */
+    box.append(answerForm(question, hash, round, viewIndex + 1, grading, 0, false));
 
-    /* 已收口且停在最后一轮 → 给"从头再来"的入口。
-       改历史答案是"只存不重算"，真想重练必须走这里。 */
     if (record?.finish_reason && viewIndex === lastIndex) {
-      const again = el("button", "ghost small", "重新练一遍");
-      again.type = "button";
-      again.addEventListener("click", async () => {
-        const ok = window.confirm("重新练一遍？所有轮次的记录会被清空，题目和关键点保留。");
-        if (!ok) return;
-        try {
-          await api(`/jobs/${state.detailId}/answers/${hash}`, {
-            method: "PATCH",
-            body: { reset: true },
-          });
-          [0, 1, 2, 3].forEach((item) => clearDraft(hash, item));
-          state.roundView.delete(hash);
-          await reloadAnswers();
-          refreshPracticeCard(question, hash);
-          showTopToast("已重置，可以重新练");
-        } catch (err) {
-          toast(err.message, true);
-        }
-      });
-      box.append(again);
+      box.append(resetButton(question, hash));
     }
   }
 
-  /* 未答的追问：**输入框永远是空的**。
-     这是本次修的 bug：以前用 record.answer 回填，
-     新的追问配上一轮的答案，看起来莫名其妙。 */
+  /* 未答的追问：**输入框永远是空的** */
   if (isPending) {
     const depth = record?.depth || 0;
     const finished = Boolean(record?.finish_reason);
@@ -1410,6 +1404,30 @@ function practiceBlock(question, record) {
   }
 
   return box;
+}
+
+/* 「重新练一遍」：改历史答案是只存不重算，真想重练必须走这里 */
+function resetButton(question, hash) {
+  const again = el("button", "ghost small", "重新练一遍");
+  again.type = "button";
+  again.addEventListener("click", async () => {
+    const ok = window.confirm("重新练一遍？所有轮次的记录会被清空，题目和关键点保留。");
+    if (!ok) return;
+    try {
+      await api(`/jobs/${state.detailId}/answers/${hash}`, {
+        method: "PATCH",
+        body: { reset: true },
+      });
+      [0, 1, 2, 3].forEach((item) => clearDraft(hash, item));
+      state.roundView.delete(hash);
+      await reloadAnswers();
+      refreshPracticeCard(question, hash);
+      showTopToast("已重置，可以重新练");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  return again;
 }
 
 /* 输入/编辑表单。
@@ -1544,8 +1562,9 @@ function answerForm(question, hash, round, roundIndex, grading, depth, finished)
 
         /* 关键顺序：先清"评估中"，再重渲染，否则新卡片仍是 disabled */
         state.grading.delete(hash);
-        // 新追问出现 → 自动翻到最新那一轮
-        state.roundView.set(hash, (result.data.transcript || []).length - 1);
+        // 新追问出现 → 自动翻到最新那一轮（followups 不含原题，所以要减 2）
+        state.roundView.set(hash,
+          Math.max(0, (result.data.transcript || []).length - 2));
 
         /* 只替换这一张卡片 + 滚动锚定：不整页重渲染，屏幕不跳 */
         const current = document.querySelector(`.q-card[data-hash="${hash}"]`);
