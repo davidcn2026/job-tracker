@@ -219,9 +219,9 @@ button.link:hover { filter: brightness(1.15); }
   margin: 0 auto;
 }
 
-/* 下拉框单独占一行，排在按钮之后 */
+/* 两个下拉（分组方式 / 状态）各占一半，排在搜索框之后 */
 .toolbar select {
-  flex: 1 1 100%;
+  flex: 1 1 0;
   order: 9;
   min-width: 0;
   min-height: 38px;
@@ -709,3 +709,45 @@ button.link:hover { filter: brightness(1.15); }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-weak);
 }
+
+/* 两类链接的视觉区分：详情是普通链接，投递用主色强调 */
+.card-meta a.link-jd { color: var(--accent); text-decoration: none; }
+.card-meta a.link-jd:hover { text-decoration: underline; }
+
+.card-meta a.link-apply {
+  color: #fff;
+  background: var(--ok);
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: .76rem;
+  text-decoration: none;
+}
+.card-meta a.link-apply:hover { filter: brightness(1.1); }
+
+/* 工具栏扩展：搜索框独占一行，两个下拉各占一半 */
+.toolbar-search {
+  flex: 1 1 100%;
+  order: 8;
+  min-height: 38px;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  outline: none;
+}
+.toolbar-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.toolbar-sel {
+  flex: 1 1 0;
+  min-width: 0;
+  order: 9;
+}
+
+
+/* 渠道分组的标题色 */
+.band-source { color: var(--accent); }

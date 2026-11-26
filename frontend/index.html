@@ -88,7 +88,16 @@
     <button id="btn-new" class="primary small">+ 新增</button>
     <button id="btn-shot" class="ghost small" title="也可以直接 Ctrl+V 粘贴截图">截图导入</button>
     <button id="btn-refresh" class="ghost small">刷新</button>
-    <select id="filter-status" class="small" aria-label="按状态筛选">
+
+    <input id="q-input" class="toolbar-search" type="search" maxlength="50"
+           placeholder="搜公司 / 岗位 / 业务" autocomplete="off">
+
+    <select id="group-by" class="small toolbar-sel" aria-label="分组方式">
+      <option value="score">按匹配度分组</option>
+      <option value="source">按渠道分组</option>
+    </select>
+
+    <select id="filter-status" class="small toolbar-sel" aria-label="按状态筛选">
       <option value="">全部状态</option>
       <option value="待投">待投</option>
       <option value="已投">已投</option>
@@ -174,8 +183,14 @@
     </label>
 
     <label class="field">
-      <span>岗位链接</span>
-      <input name="url" type="url" maxlength="500" inputmode="url" placeholder="https://">
+      <span>岗位详情链接（看 JD 的地方）</span>
+      <input name="url" type="text" maxlength="500" inputmode="url" placeholder="Boss 岗位页 / 官网职位描述">
+    </label>
+
+    <label class="field">
+      <span>投递链接（真正提交简历的入口，可留空）</span>
+      <input name="apply_url" type="text" maxlength="500" inputmode="url"
+             placeholder="OfferShow / 官网招聘页。Boss 岗位通常没有，留空即可">
     </label>
 
     <div class="grid2">

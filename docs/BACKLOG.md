@@ -25,7 +25,7 @@
 
 **成本**：`migrations/006`（改约束 + 加 `idx_user_source` 索引；005 已被"AI 分析字段"占用）+ `models/job.py` 的 `__table_args__` + `docs/API.md` 附录 A。约 15 分钟。
 
-**触发条件**：需要记录"同一岗位多渠道投递"时。
+**已实现**（2026-11-26，迁移 011）：`uk_user_company_position_source` + `idx_user_source`；前后端均支持按渠道分组/筛选。
 
 ### 2. 筛选靠 query 参数，不新增接口
 
@@ -94,7 +94,7 @@ GET /api/v1/jobs?q=Python&status=预约面试&source=Boss直聘
 | 4 | ~~简历导入~~ | **已完成**：PDF / DOCX / TXT / 图片 / 粘贴 → 解析 → 用户核对 → 存 `users.profile_text`；分析改用真实简历（不再硬编码） | — |
 | 5 | 状态历史 `status_log` | 转化率复盘 | 半天 |
 | 6 | pytest 测试 | 回归保护 | 半天 |
-| 7 | 公司重复 / 渠道分组 | 数据完整性 | 见"已定结论 1" |
+| 7 | ~~公司重复 / 渠道分组~~ | **已完成**：唯一键含 source（同岗位可多渠道记录）+ 列表可按渠道分组 + `status`/`source`/`q` 三个筛选参数 | — |
 | 8 | **重写 README §5–§8** | 现在还是 P0 双表设计的描述，`status_log` 并不存在；已加过时警告但内容仍需按当前 schema 重写 | 1～2 小时 |
 | 9 | **从零重写 `Dockerfile` / `compose.yaml`** | 当前两个文件是 AI 辅助产出的，只有"能讲清每个决策"才算自己的。做法：删掉重写，不查旧文件；写完对照检查是否漏了 `static/`、`.env` 排除、`healthcheck`、非 root | 1～2 小时 |
 | 10 | 生产化补齐（HTTPS / 镜像仓库 / 日志轮转 / 限流） | 真要让朋友通过公网使用时才需要 | 半天（需一台云服务器） |

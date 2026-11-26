@@ -41,6 +41,8 @@ const state = {
   user: null,
   items: [],
   statusFilter: "",
+  query: '',
+  groupBy: 'score',
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -160,12 +162,20 @@ function showLogin() {
  * 注意：筛选本身是"临时视图状态"，不是用户偏好，所以不跨会话保留。 */
 function resetUiState() {
   state.statusFilter = "";
+  state.query = "";
+  state.groupBy = "score";
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
 
   const select = $("#filter-status");
   if (select) select.value = "";
+
+  const search = $("#q-input");
+  if (search) search.value = "";
+
+  const groupBy = $("#group-by");
+  if (groupBy) groupBy.value = "score";
 
   const dialog = $("#dlg-job");
   if (dialog && dialog.open) dialog.close();
@@ -292,6 +302,18 @@ function schedulePendingPoll() {
 }
 
 /* ---------- 数据加载 ---------- */
+/* 把当前筛选条件拼成 query string。
+ * 筛选在**服务端**做（后端已支持 status / source / q）：
+ * 逻辑只有一份，数据涨到几百条也不用改前端。 */
+function buildQuery() {
+  const params = new URLSearchParams();
+  params.set("page", "1");
+  params.set("page_size", String(FETCH_LIMIT));
+  if (state.statusFilter) params.set("status", state.statusFilter);
+  if (state.query) params.set("q", state.query);
+  return params.toString();
+}
+
 /* silent = true 用于后台轮询：不显示骨架屏，避免每次刷新闪一下 */
 async function refresh(silent = false) {
   const list = $("#list");
@@ -302,7 +324,7 @@ async function refresh(silent = false) {
   }
 
   try {
-    const payload = await api(`/jobs?page=1&page_size=${FETCH_LIMIT}`);
+    const payload = await api(`/jobs?${buildQuery()}`);
     state.items = payload.data.list || [];
     if (!silent) state.pollCount = 0;
     render();
@@ -315,21 +337,14 @@ async function refresh(silent = false) {
 }
 
 /* ---------- 渲染 ---------- */
-function filtered() {
-  if (!state.statusFilter) return state.items;
-  return state.items.filter((job) => job.status === state.statusFilter);
-}
-
-/* 岗位按匹配度分层。
- * 分数区间与提示词里的分档完全一致——同一套标准，避免"模型说可以投、界面说别投"。
- * 未分析的单列一组，它们需要先点「AI 分析」拿分数。 */
-const SCORE_BANDS = [
-  { key: "focus", label: "重点投递", min: 75, hint: "值得为它专门准备" },
-  { key: "consider", label: "可考虑", min: 65, hint: "准备一下再投" },
-  { key: "mass", label: "海投", min: 50, hint: "顺手投，别花太多精力" },
-  { key: "skip", label: "不建议", min: 0, hint: "缺核心能力，先放一放" },
-  { key: "none", label: "未分析", min: null, hint: "先点「AI 分析」拿到分数" },
-];
+/* 分组方式：按匹配度 / 按渠道。两者互斥，用工具栏的下拉切换。 */
+const SOURCE_ORDER = ["Boss直聘", "本校", "自定义", "其他"];
+const SOURCE_HINT = {
+  Boss直聘: "App 内沟通投递",
+  本校: "校招 / 宣讲会 / 就业群",
+  自定义: "内推 / 官网 / 其它来源",
+  其他: "未归类",
+};
 
 function bandOf(job) {
   if (job.match_score == null) return "none";
@@ -339,18 +354,53 @@ function bandOf(job) {
   return "skip";
 }
 
-function bandBlock(band, items, open) {
+/* 按匹配度分桶，顺序固定（重点在最前） */
+function groupsByScore(jobs) {
+  const buckets = new Map(SCORE_BANDS.map((band) => [band.key, []]));
+  for (const job of jobs) buckets.get(bandOf(job)).push(job);
+
+  return SCORE_BANDS
+    .map((band) => ({
+      key: band.key,
+      label: band.label,
+      hint: band.hint,
+      className: `band-${band.key}`,
+      items: buckets.get(band.key),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+/* 按招聘渠道分桶。渠道来自 job.source，是用户录入时选的枚举值。 */
+function groupsBySource(jobs) {
+  const buckets = new Map(SOURCE_ORDER.map((name) => [name, []]));
+  for (const job of jobs) {
+    const name = SOURCE_ORDER.includes(job.source) ? job.source : "其他";
+    buckets.get(name).push(job);
+  }
+
+  return SOURCE_ORDER
+    .map((name) => ({
+      key: name,
+      label: name,
+      hint: SOURCE_HINT[name] || "",
+      className: "band-source",
+      items: buckets.get(name),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function groupBlock(group, open) {
   const box = el("details", "band");
   box.open = open;
 
   const summary = el("summary", "band-head");
-  summary.append(el("span", `band-title band-${band.key}`, band.label));
-  summary.append(el("span", "band-count", `${items.length} 个`));
-  summary.append(el("span", "band-hint", band.hint));
+  summary.append(el("span", `band-title ${group.className}`, group.label));
+  summary.append(el("span", "band-count", `${group.items.length} 个`));
+  if (group.hint) summary.append(el("span", "band-hint", group.hint));
   box.append(summary);
 
   const body = el("div", "band-body");
-  for (const job of items) body.append(jobCard(job));
+  for (const job of group.items) body.append(jobCard(job));
   box.append(body);
 
   return box;
@@ -358,42 +408,46 @@ function bandBlock(band, items, open) {
 
 function render() {
   const list = $("#list");
-  const rows = filtered();
+  const rows = state.items;          // 筛选已经在服务端做了（status / source / q）
 
   list.replaceChildren();
 
   if (rows.length === 0) {
     list.append(el("p", "empty",
-      state.statusFilter ? "这个状态下没有记录" : "还没有记录，点「+ 新增」开始"));
+      state.query || state.statusFilter
+        ? "没有符合条件的岗位，换个条件试试"
+        : "还没有记录，点「+ 新增」开始"));
   } else {
-    const buckets = new Map(SCORE_BANDS.map((band) => [band.key, []]));
-    for (const job of rows) buckets.get(bandOf(job)).push(job);
+    const groups = state.groupBy === "source"
+      ? groupsBySource(rows)
+      : groupsByScore(rows);
 
-    // 只渲染有内容的组；默认展开第一个非空组，其余折叠（手机上不会一屏铺满）
+    // 默认只展开第一组，其余折叠（手机上不会一屏铺满）
     let opened = false;
-    for (const band of SCORE_BANDS) {
-      const items = buckets.get(band.key);
-      if (items.length === 0) continue;
-      list.append(bandBlock(band, items, !opened));
+    for (const group of groups) {
+      list.append(groupBlock(group, !opened));
       opened = true;
     }
   }
 
   // 分层视图不用分页（分组 + 折叠已解决长列表问题）
+  $("#pager") && ($("#pager").hidden = true);
 
-  /* 筛选提示：只有真的在筛选时才出现，并给出"共几条、怎么取消" */
+  /* 筛选提示：让"正在筛选/搜索"这件事可见，避免误以为数据丢了 */
   const hint = $("#filter-hint");
-  if (state.statusFilter) {
+  const active = [];
+  if (state.query) active.push(`搜索「${state.query}」`);
+  if (state.statusFilter) active.push(`状态「${state.statusFilter}」`);
+
+  if (active.length) {
     hint.hidden = false;
-    $("#filter-hint-text").textContent =
-      `正在筛选「${state.statusFilter}」，共 ${rows.length} 条`;
+    $("#filter-hint-text").textContent = `${active.join(" · ")}，共 ${rows.length} 条`;
   } else {
     hint.hidden = true;
   }
 
   schedulePendingPoll();
 }
-
 function jobCard(job) {
   const card = el("div", "card");
   card.dataset.id = String(job.id);
@@ -424,12 +478,20 @@ function jobCard(job) {
   if (job.next_interview_at) {
     meta.append(el("span", null, `面试 ${formatDateTime(job.next_interview_at)}`));
   }
+  // 两类链接分开显示：看 JD（详情）和真正投递（入口）
   if (job.url) {
-    const link = el("a", null, "岗位链接");
+    const link = el("a", "link-jd", "岗位详情");
     link.href = job.url;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     meta.append(link);
+  }
+  if (job.apply_url) {
+    const apply = el("a", "link-apply", "去投递 ↗");
+    apply.href = job.apply_url;
+    apply.target = "_blank";
+    apply.rel = "noopener noreferrer";
+    meta.append(apply);
   }
   if (meta.childNodes.length) card.append(meta);
 
@@ -875,7 +937,7 @@ function openForm(job, draft = null) {
   const source = job || draft;
   if (source) {
     for (const key of ["company", "position", "status", "source", "source_detail",
-      "salary_min", "salary_max", "salary_note", "url", "published_at",
+      "salary_min", "salary_max", "salary_note", "url", "apply_url", "published_at",
       "company_business", "description", "note"]) {
       const input = form.elements[key];
       if (input) input.value = source[key] ?? "";
@@ -930,6 +992,7 @@ async function submitForm(event) {
     salary_max: emptyToNull(form.elements.salary_max.value, true),
     salary_note: emptyToNull(form.elements.salary_note.value),
     url: emptyToNull(form.elements.url.value),
+    apply_url: emptyToNull(form.elements.apply_url.value),
     published_at: emptyToNull(form.elements.published_at.value),
     company_business: emptyToNull(form.elements.company_business.value),
     description: emptyToNull(form.elements.description.value),
@@ -1057,14 +1120,37 @@ async function boot() {
   });
   $("#btn-cancel").addEventListener("click", closeForm);
   $("#job-form").addEventListener("submit", submitForm);
+
+  /* 状态筛选：走服务端，所以要重新拉数据（不能只 render） */
   $("#filter-status").addEventListener("change", (event) => {
     state.statusFilter = event.currentTarget.value;
+    refresh(true);
+  });
+
+  /* 搜索框：防抖 300ms，避免每个字符都打一次接口 */
+  let queryTimer = null;
+  $("#q-input").addEventListener("input", (event) => {
+    const value = event.currentTarget.value.trim();
+    clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => {
+      if (value === state.query) return;
+      state.query = value;
+      refresh(true);
+    }, 300);
+  });
+
+  /* 分组方式：纯展示层，不需要请求后端 */
+  $("#group-by").addEventListener("change", (event) => {
+    state.groupBy = event.currentTarget.value;
     render();
   });
+
   $("#btn-clear-filter").addEventListener("click", () => {
     state.statusFilter = "";
+    state.query = "";
     $("#filter-status").value = "";
-    render();
+    $("#q-input").value = "";
+    refresh(true);
   });
 
   if (!state.token) {

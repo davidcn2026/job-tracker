@@ -24,10 +24,16 @@ ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 async def list_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None, description="按状态筛选"),
+    source: str | None = Query(None, description="按招聘渠道筛选"),
+    q: str | None = Query(None, max_length=50, description="按公司/岗位/业务模糊搜索"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_database),
 ):
-    rows, total = await crud_job.list_jobs(db, current_user.id, page, page_size)
+    rows, total = await crud_job.list_jobs(
+        db, current_user.id, page, page_size,
+        status=status, source=source, q=q,
+    )
 
     return Resp(
         data=JobListData(
@@ -63,7 +69,7 @@ async def create_job(
     try:
         job = await crud_job.create_job(db, current_user.id, payload)
     except IntegrityError:
-        raise HTTPException(status_code=409, detail="该公司下已有这个岗位") from None
+        raise HTTPException(status_code=409, detail="该公司这个岗位已通过同一渠道录入过") from None
 
     # 录入即分析：用户不该为了拿到分数去点按钮。
     # 有 JD 才排队；没简历时后台会自己跳过（拿别人的经历评判会失真）。
@@ -124,7 +130,7 @@ async def update_job(
     try:
         job = await crud_job.update_job(db, current_user.id, job_id, payload)
     except IntegrityError:
-        raise HTTPException(status_code=409, detail="该公司下已有这个岗位") from None
+        raise HTTPException(status_code=409, detail="该公司这个岗位已通过同一渠道录入过") from None
 
     if job is None:
         raise HTTPException(status_code=404, detail=f"没有 id={job_id} 这条岗位")

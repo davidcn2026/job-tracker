@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
@@ -9,16 +9,43 @@ from app.schemas.llm import AnalysisResult
 
 
 async def list_jobs(
-    db: AsyncSession, user_id: int, page: int, page_size: int
+    db: AsyncSession,
+    user_id: int,
+    page: int,
+    page_size: int,
+    status: str | None = None,
+    source: str | None = None,
+    q: str | None = None,
 ) -> tuple[list[Job], int]:
-    """返回 (当前页数据, 总数)。所有查询强制带 user_id。"""
-    where = Job.user_id == user_id
+    """返回 (当前页数据, 总数)。所有查询强制带 user_id。
 
-    total = await db.scalar(select(func.count()).select_from(Job).where(where)) or 0
+    三个筛选项互相独立、可任意组合（按 BACKLOG 已定结论：
+    筛选靠 query 参数，不新增 /jobs/search 这类路由）。
+    """
+    where = [Job.user_id == user_id]
+
+    if status:
+        where.append(Job.status == status)
+    if source:
+        where.append(Job.source == source)
+    if q:
+        # 模糊搜索公司名 / 岗位名 / 公司业务。
+        # 不搜 JD 全文：data 量大且 MySQL 的 LIKE %x% 无法走索引，
+        # 真要全文搜索应该上 FULLTEXT 或独立搜索引擎，不在这里假装支持。
+        like = f"%{q}%"
+        where.append(
+            or_(
+                Job.company.like(like),
+                Job.position.like(like),
+                Job.company_business.like(like),
+            )
+        )
+
+    total = await db.scalar(select(func.count()).select_from(Job).where(*where)) or 0
 
     result = await db.execute(
         select(Job)
-        .where(where)
+        .where(*where)
         .order_by(Job.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)

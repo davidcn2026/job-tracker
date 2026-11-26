@@ -19,10 +19,16 @@ from app.db.base import Base
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        UniqueConstraint("user_id", "company", "position", name="uk_user_company_position"),
+        # 唯一键含 source：同公司同岗位在不同渠道投递算两条真实记录
+        # （Boss直聘 看到 + 本校宣讲会投，跟进方式不同，不能合并）
+        UniqueConstraint(
+            "user_id", "company", "position", "source",
+            name="uk_user_company_position_source",
+        ),
         Index("idx_user_status", "user_id", "status"),
         Index("idx_user_published", "user_id", "published_at"),
         Index("idx_user_verdict", "user_id", "verdict"),
+        Index("idx_user_source", "user_id", "source"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -62,6 +68,10 @@ class Job(Base):
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     verdict: Mapped[str | None] = mapped_column(String(20))
+
+    # 投递入口，与 url（岗位详情页）分开：
+    # Boss直聘没有公开投递链接，投递入口常在 OfferShow / 官网，两者不能混填
+    apply_url: Mapped[str | None] = mapped_column(String(500))
 
     @property
     def has_description(self) -> bool:

@@ -1,10 +1,35 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Status = Literal["待投", "已投", "预约面试", "已面试", "已挂"]
 Source = Literal["本校", "Boss直聘", "自定义", "其他"]
+
+def _clean_url(value: str | None) -> str | None:
+    """规整链接：缺协议自动补 https，非 http(s) 协议直接拒绝。
+
+    这两个字段会直接进前端 <a href>，如果放行 javascript: 之类的 scheme，
+    点一下就执行脚本。但也不能太苛刻——很多人复制的是不带协议的域名，
+    直接报错不如帮他补上。
+    """
+    if value is None:
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    lower = text.lower()
+    if lower.startswith(("http://", "https://")):
+        return text
+
+    # 第一段里出现冒号 → 是别的协议（javascript: / ftp: / mailto:），拒绝
+    if ":" in text.split("/", 1)[0]:
+        raise ValueError("链接只支持 http:// 或 https://")
+
+    # 没写协议：当作域名，补上 https
+    return "https://" + text
 
 
 class JobIn(BaseModel):
@@ -22,12 +47,19 @@ class JobIn(BaseModel):
     salary_min: int | None = Field(default=None, ge=0, le=1000)
     salary_max: int | None = Field(default=None, ge=0, le=1000)
     salary_note: str | None = Field(default=None, max_length=50)
+    # url = 岗位详情页（看 JD）；apply_url = 投递入口（真正提交简历）
     url: str | None = Field(default=None, max_length=500)
+    apply_url: str | None = Field(default=None, max_length=500)
     published_at: date | None = None
     description: str | None = None
     company_business: str | None = Field(default=None, max_length=200)
     note: str | None = None
     next_interview_at: datetime | None = None
+
+    @field_validator("url", "apply_url")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
+        return _clean_url(value)
 
     @model_validator(mode="after")
     def _check_salary_range(self) -> "JobIn":
@@ -55,6 +87,7 @@ class JobOut(BaseModel):
     source: str
     source_detail: str | None
     url: str | None
+    apply_url: str | None
     published_at: date | None
     company_business: str | None
     created_at: datetime
@@ -93,11 +126,17 @@ class JobUpdate(BaseModel):
     salary_max: int | None = Field(default=None, ge=0, le=1000)
     salary_note: str | None = None
     url: str | None = None
+    apply_url: str | None = None
     published_at: date | None = None
     description: str | None = None
     company_business: str | None = None
     note: str | None = None
     next_interview_at: datetime | None = None
+
+    @field_validator("url", "apply_url")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
+        return _clean_url(value)
 
 
 class JobDeleted(BaseModel):
