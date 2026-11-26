@@ -1139,3 +1139,62 @@ button.link:hover { filter: brightness(1.15); }
   0%, 100% { opacity: .35; }
   50%      { opacity: 1; }
 }
+
+/* ============ 轮次导航（上一轮 / 下一轮） ============ */
+.round-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+.round-nav button {
+  min-width: 38px;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.round-nav button:disabled { opacity: .35; }
+.round-label {
+  flex: 1;
+  text-align: center;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* 已答轮次：回答内容 */
+.practice-answer {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.practice-answer-label {
+  display: block;
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+/* 未保存草稿提醒 */
+.practice-warn {
+  margin: 0;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: var(--warn-weak);
+  color: var(--warn);
+  font-size: .78rem;
+  font-weight: 600;
+}
+
+/* 卡片上有草稿时的角标 */
+.q-card .draft-badge {
+  font-size: .72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warn-weak);
+  color: var(--warn);
+}

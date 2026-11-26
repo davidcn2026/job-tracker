@@ -39,7 +39,17 @@ class AnswerIn(BaseModel):
 
 
 class StatusIn(BaseModel):
-    status: str = Field(pattern="^(wrong|tried|mastered)$")
+    """手动改状态，或修改历史某一轮的答案。
+
+    两种用途共用一个接口：
+      status  → 我不会 / 练过了 / 已掌握（不调模型）
+      round+answer → 修正历史轮次的答案文字（**不重新评估**）
+    """
+
+    status: str | None = Field(default=None, pattern="^(wrong|tried|mastered)$")
+    round: int | None = Field(default=None, ge=0, le=MAX_DEPTH)
+    answer: str | None = Field(default=None, max_length=8000)
+    reset: bool = Field(default=False, description="重新练一遍：清空所有轮次")
 
 
 # ---------- 工具 ----------
@@ -172,7 +182,7 @@ async def submit_answer(
     transcript = [dict(item) for item in (record.transcript or [])] if record else []
     depth = record.depth if record else 0
 
-    # transcript 的语义：每一轮是「问了什么 + 答了什么」的完整配对。
+    # transcript 的语义：每一轮是「问了什么 + 答了什么 + 那一轮的评估」。
     # 还没被回答的那条追问以 answer=None 存着，等下次提交时补上。
     if not transcript:
         # 第一次提交：这一答对应的是卡片上的原题
@@ -191,6 +201,15 @@ async def submit_answer(
     except LLMError:
         raise HTTPException(status_code=503, detail="评估失败，请稍后重试") from None
 
+    # 把这一轮的评估结果挂在被回答的那条记录上。
+    # 这样用户翻回上一轮时，看到的是"当时的评估"，而不是最新一次的结论。
+    transcript[-1]["evaluation"] = {
+        "covered": evaluation.covered,
+        "wrong": [item.model_dump() for item in evaluation.wrong],
+        "missing": evaluation.missing,
+        "verdict": evaluation.verdict,
+    }
+
     if evaluation.next_question:
         # 挂一条待答的追问，等用户下次提交时补答案
         transcript.append(
@@ -205,7 +224,6 @@ async def submit_answer(
     else:
         new_depth = depth
         finish_reason = "max_depth"
-
     status = derive_status(
         covered=len(evaluation.covered),
         total=len(question.key_points),
@@ -254,11 +272,73 @@ async def set_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_database),
 ) -> Resp[dict]:
-    """手动标记状态：我不会 / 练过了 / 已掌握。
+    """手动改状态，或修正历史轮次的答案。
 
-    **不调用模型**——用户说"我不会"时，模型必然判全部 missing，
-    没必要花一次调用去确认已知事实。
+    两种用法都**不调用模型**：
+      - 「我不会」时，模型必然判全部 missing，没必要花一次调用确认已知事实
+      - 修正历史答案只是把记录改准，**不重新评估**：
+        第 2 层追问是基于第 1 层的答案问出来的，重算会连锁改动后面所有轮，
+        而且"面试已经发生了"。想真的重练，用「重新练一遍」从第 0 轮开始。
     """
+    if payload.reset:
+        # 重新练一遍：清空所有轮次，回到"没练过"。JD/简历没变，题目留着。
+        record = await crud_interview.upsert_answer(
+            db,
+            current_user.id,
+            job_id,
+            target_hash,
+            transcript=[],
+            covered=None,
+            wrong=None,
+            missing=None,
+            depth=0,
+            finish_reason=None,
+            last_verdict=None,
+            status="untried",
+        )
+        return Resp(
+            data={
+                "question_hash": record.question_hash,
+                "status": record.status,
+                "depth": record.depth,
+                "transcript": record.transcript or [],
+            }
+        )
+
+    if payload.round is not None and payload.answer is not None:
+        record = await crud_interview.get_answer(
+            db, current_user.id, job_id, target_hash
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="这道题还没有作答记录")
+
+        transcript = [dict(item) for item in (record.transcript or [])]
+        index = next(
+            (i for i, item in enumerate(transcript) if int(item.get("layer", -1)) == payload.round),
+            None,
+        )
+        if index is None:
+            raise HTTPException(status_code=404, detail="没有这一轮的记录")
+
+        transcript[index]["answer"] = payload.answer
+        # 标记改过：让用户知道这段文字和当时被评估的不是同一版
+        transcript[index]["edited"] = True
+
+        record = await crud_interview.upsert_answer(
+            db, current_user.id, job_id, target_hash, transcript=transcript
+        )
+        return Resp(
+            data={
+                "question_hash": record.question_hash,
+                "status": record.status,
+                "depth": record.depth,
+                "transcript": record.transcript,
+            }
+        )
+
+    if not payload.status:
+        raise HTTPException(status_code=422, detail="要么给 status，要么给 round + answer")
+
     record = await crud_interview.upsert_answer(
         db, current_user.id, job_id, target_hash, status=payload.status
     )
@@ -267,6 +347,7 @@ async def set_status(
             "question_hash": record.question_hash,
             "status": record.status,
             "depth": record.depth,
+            "transcript": record.transcript,
         }
     )
 
