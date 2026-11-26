@@ -1283,3 +1283,18 @@ button.link:hover { filter: brightness(1.15); }
 .q-follow > summary::before { content: "\25B8 "; }
 .q-follow[open] > summary::before { content: "\25BE "; }
 .q-follow > .q-followup { margin-top: 4px; }
+
+/* ============ 答题要点（= 参考答案的提纲版） ============ */
+/* 原来的"关键点 ✓/✗/· 检查清单"取消了：
+   评估结论里已经写明漏了什么，再显示"覆盖 0/5"是重复信息；
+   而且挖空式清单会让人把注意力放在"打勾"而不是"能不能说出来"。
+   现在它就是一道题的答题提纲。 */
+.q-points-simple {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: .86rem;
+  line-height: 1.8;
+  color: var(--text);
+}
+.q-points-simple li { margin-bottom: 4px; }
+.q-points-box > .q-answer-text { margin-top: 10px; }

@@ -28,3 +28,8 @@ backups/
 # 测试覆盖率
 .coverage
 htmlcov/
+
+# 临时脚手架文件（我用 Python/PowerShell 打补丁时生成的，一律不提交）
+_*.py
+_*.txt
+_*.js
