@@ -987,8 +987,17 @@ function renderInterviewPrep(job) {
   const head = el("div", "prep-head");
   const records = [...state.answers.values()];
   const practiced = records.filter((r) => r.status !== "untried").length;
-  head.append(el("span", "muted",
-    `${prep.questions.length} 道题 · 已练 ${practiced} 道 · 生成于 ${formatDateTime(job.interview_prep_at)}`));
+  /* 统计信息压短：手机上原来写"生成于 2026-11-26 09:13"会把右边的
+     重新生成按钮挤成两行。日期只留 MM-DD，完整时间放进 title。 */
+  const stamp = job.interview_prep_at
+    ? String(formatDateTime(job.interview_prep_at)).slice(5, 10)
+    : "";
+  const meta = el("span", "muted prep-meta",
+    `${prep.questions.length} 道题 · 已练 ${practiced} 道${stamp ? ` · ${stamp}` : ""}`);
+  if (job.interview_prep_at) {
+    meta.title = `生成于 ${formatDateTime(job.interview_prep_at)}`;
+  }
+  head.append(meta);
   const again = el("button", "ghost small", "重新生成");
   again.addEventListener("click", () => generatePrep(job.id, again, true));
   head.append(again);

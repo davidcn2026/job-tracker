@@ -1298,3 +1298,21 @@ button.link:hover { filter: brightness(1.15); }
 }
 .q-points-simple li { margin-bottom: 4px; }
 .q-points-box > .q-answer-text { margin-top: 10px; }
+
+/* 「面试准备」头部：统计信息和重新生成按钮在一行内
+   之前信息太长，把按钮挤成了"重新生 / 成"两行。 */
+.prep-head {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.prep-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prep-head > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
