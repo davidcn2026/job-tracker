@@ -1198,3 +1198,30 @@ button.link:hover { filter: brightness(1.15); }
   background: var(--warn-weak);
   color: var(--warn);
 }
+
+/* ============ 题目的元信息（依据 / 为什么问），默认折叠 ============ */
+/* 依据经常是一整段简历或 JD 原句，展开能占半屏。
+   收起后只留一行"依据 · 来自简历"，需要核对时再点开。 */
+.q-meta {
+  margin: 2px 0;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.q-meta > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--accent);
+  font-size: .76rem;
+  padding: 2px 0;
+}
+.q-meta > summary::-webkit-details-marker { display: none; }
+.q-meta > summary::before { content: "\25B8 "; }
+.q-meta[open] > summary::before { content: "\25BE "; }
+.q-meta > summary::after { content: ""; }
+.q-meta[open] { padding-bottom: 2px; }
+.q-meta p {
+  margin: 4px 0 0;
+  font-size: .78rem;
+  line-height: 1.65;
+}

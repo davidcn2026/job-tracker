@@ -1081,11 +1081,20 @@ function questionCard(question, record) {
 
   card.append(el("p", "q-text", question.question));
 
-  if (question.basis_quote) {
-    card.append(el("p", "q-quote", `依据：${question.basis_quote}`));
-  }
-  if (question.why_asked) {
-    card.append(el("p", "q-why", `为什么问：${question.why_asked}`));
+  /* 依据 / 为什么问 默认折叠。
+     这两条是"关于题目的元信息"，依据常常是一整段简历或 JD 原句，
+     展开能占掉半屏；而用户真正要看的是题目本身和关键点。 */
+  if (question.basis_quote || question.why_asked) {
+    const meta = el("details", "q-meta");
+    meta.append(el("summary", null,
+      `依据 · ${BASIS_LABEL[question.basis] || question.basis}`));
+    if (question.basis_quote) {
+      meta.append(el("p", "q-quote", question.basis_quote));
+    }
+    if (question.why_asked) {
+      meta.append(el("p", "q-why", `为什么问：${question.why_asked}`));
+    }
+    card.append(meta);
   }
 
   /* 关键点：练过之后按 covered/wrong/missing 上色。
