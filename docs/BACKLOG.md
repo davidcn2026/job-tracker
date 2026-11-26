@@ -88,7 +88,7 @@ GET /api/v1/jobs?q=Python&status=预约面试&source=Boss直聘
 
 | # | 事项 | 价值 | 成本 |
 |---|---|---|---|
-| 1 | `GET /jobs` 加筛选参数（`status` / `source` / `q`） | 列表可用性 | 30 分钟 |
+| 1 | ~~`GET /jobs` 加筛选参数~~ | **已完成**（status / source / q） | — |
 | 2 | ~~Docker + 部署~~ | **已完成**（Dockerfile + `.dockerignore` + `compose.yaml`，迁移文件由 MySQL 初始化自动执行） | — |
 | 3 | ~~前端页面~~ | **已完成**：登录/注册、列表（筛选+分页）、增删改、AI 分析、截图导入、简历编辑 | — |
 | 4 | ~~简历导入~~ | **已完成**：PDF / DOCX / TXT / 图片 / 粘贴 → 解析 → 用户核对 → 存 `users.profile_text`；分析改用真实简历（不再硬编码） | — |

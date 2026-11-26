@@ -106,6 +106,10 @@ class JobDetail(JobOut):
     description: str | None
     note: str | None
     analysis: str | None
+    # 面试准备（JSON 字符串）。没生成过为 None。
+    # 与 analysis 一样以字符串返回，字段结构由前端解析。
+    interview_prep: str | None = None
+    interview_prep_at: datetime | None = None
 
 
 class JobListData(BaseModel):

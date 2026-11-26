@@ -843,3 +843,107 @@ button.link:hover { filter: brightness(1.15); }
 }
 
 .detail-spacer { height: 20px; }
+
+/* ============ 面试准备（详情页内） ============ */
+.prep { display: flex; flex-direction: column; gap: 12px; }
+
+.prep-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.prep-head .muted { color: var(--muted); font-size: .8rem; }
+
+.prep-sub {
+  margin: 8px 0 0;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.prep-gaps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: .86rem;
+  line-height: 1.75;
+}
+.prep-gaps li { margin-bottom: 6px; }
+
+.prep-advice {
+  margin: 0;
+  font-size: .86rem;
+  line-height: 1.75;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+/* ---- 题目卡片 ---- */
+.q-card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 左侧色条直接编码"你能不能答"：红=答不上来，黄=不确定，绿=能答 */
+.q-card.q-gap { border-left-color: var(--danger); }
+.q-card.q-unknown { border-left-color: var(--warn); }
+.q-card.q-ok { border-left-color: var(--ok); }
+
+.q-head { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.q-status,
+.q-basis {
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.q-status-gap { background: var(--danger-weak); color: var(--danger); }
+.q-status-unknown { background: var(--warn-weak); color: var(--warn); }
+.q-status-ok { background: var(--ok-weak); color: var(--ok); }
+
+.q-basis { background: var(--bg); color: var(--muted); border-color: var(--line); }
+
+.q-text {
+  margin: 0;
+  font-size: .92rem;
+  font-weight: 600;
+  line-height: 1.65;
+}
+
+.q-quote,
+.q-why,
+.q-followup {
+  margin: 0;
+  font-size: .78rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.q-followup { color: var(--warn); }
+
+.q-answer > summary {
+  cursor: pointer;
+  font-size: .8rem;
+  color: var(--accent);
+  list-style: none;
+  user-select: none;
+}
+.q-answer > summary::-webkit-details-marker { display: none; }
+.q-answer > summary::before { content: "▸ "; }
+.q-answer[open] > summary::before { content: "▾ "; }
+
+.q-answer-text {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-size: .85rem;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}

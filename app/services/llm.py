@@ -5,7 +5,7 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.schemas.llm import AnalysisResult, JobDraft, ResumeOCR
+from app.schemas.llm import AnalysisResult, InterviewPrep, JobDraft, ResumeOCR
 from app.services.image import prepare_images
 
 SYSTEM_PROMPT = """你是岗位匹配分析助手。根据【我的技能】判断【JD原文】是否值得投递。
@@ -107,27 +107,36 @@ RESUME_OCR_PROMPT = """你是简历文字转录助手。把这张简历图片里
 
 
 
-async def call_llm(system: str, user: str) -> str:
+async def call_llm(
+    system: str,
+    user: str,
+    *,
+    timeout: float = 30,
+    max_tokens: int | None = None,
+) -> str:
     """底层调用，返回模型原始文本。
 
-    要点：
-    - httpx.AsyncClient(timeout=30.0)
-    - 失败（超时/非 200）抛 LLMError
-    """
-    try:
-        response = await _client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.0,
-            timeout=30,
-            response_format={"type": "json_object"},
-        )
-    except Exception as e:          # 任何 SDK /
+    失败（超时 / 非 200 / 网络）一律抛 LLMError。
 
-        # 网络 / 超时失败都归为 LLMError
+    timeout / max_tokens 可覆盖：分析一份 JD 很快（默认 30 秒够），
+    但生成 15 道带参考答案的面试题输出很长，需要更宽的时限和上限。
+    """
+    kwargs: dict = {
+        "model": settings.llm_model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.0,
+        "timeout": timeout,
+        "response_format": {"type": "json_object"},
+    }
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
+
+    try:
+        response = await _client.chat.completions.create(**kwargs)
+    except Exception as e:
         raise LLMError(f"模型调用失败: {e}") from e
 
     content = response.choices[0].message.content
@@ -380,3 +389,61 @@ async def call_llm_tools(messages: list[dict], tools: list[dict] | None = None):
         return await _client.chat.completions.create(**kwargs)
     except Exception as e:
         raise LLMError(f"模型调用失败: {e}") from e
+
+
+# ===== 面试准备 =====
+# 依据只有三类：JD 原文、用户简历原文、行业通用知识。
+# **刻意不做"某公司往年考过什么"**——面经零散、过时、无法验证真伪，
+# 让模型回忆等于让它编，而用户会把编造的题当真去准备。
+INTERVIEW_SYSTEM = """你是面试教练。根据用户的简历和这道岗位的 JD，预测这场面试会问什么，并给出答题要点。
+
+输出 json，字段如下：
+- questions: 12~15 道题，按「最可能被问」排序
+  每题包含：
+  - question: 问题本身。要具体，禁止「请介绍一下你的项目」这种空泛题
+  - basis: "resume"（来自简历）| "jd"（来自岗位要求）| "general"（行业通用知识）
+  - basis_quote: 依据原句。basis=resume 时从简历原文摘，basis=jd 时从 JD 原文摘，
+                 basis=general 时填空字符串
+  - why_asked: 一句话说明面试官想验证什么
+  - your_status: "ok"（简历里有对应经历，能答）| "gap"（简历看不出相关能力，很可能答不上来）
+                 | "unknown"（无法判断）
+  - reference_answer: 答题骨架，150~250 字。要具体到能照着说出来，不要泛泛而谈
+  - follow_up: 面试官听到这个回答后会追问什么，一句话
+- gaps_summary: 3~5 条，面试前必须补的点，按优先级排
+- prep_advice: 一段话，说明这份准备怎么用、时间怎么分配
+
+硬性规则：
+1. 题目必须来自材料。basis=resume 的题必须能在简历里找到对应经历；
+   basis=jd 的题必须对应 JD 的某条要求。不许出与材料无关的题
+2. **禁止声称「该公司往年考过 X」**。你没有这个信息，编造会误导用户
+3. 优先出深挖类题（追问项目细节、技术决策、边界情况），少出纯背诵题
+4. reference_answer 必须基于简历里**真实存在的经历**组织。
+   绝不能虚构用户没做过的事。简历里没有的能力，如实标 gap，
+   并在答案里给「怎么答才不露怯」（如承认没做过、说明相邻经验、给出学习路径）
+5. 中文，直接给内容，不要客套和铺垫
+"""
+
+
+async def generate_interview_prep(jd: str, profile: str) -> InterviewPrep:
+    """业务层：JD + 简历 → 面试准备（预测题 + 答案 + 弱点）。
+
+    输出很长（15 道题带答案约 4000~6000 token），所以放宽超时和上限。
+    """
+    if not settings.deepseek_api_key:
+        raise LLMError("未配置 DEEPSEEK_API_KEY，无法生成面试准备")
+
+    if not jd.strip():
+        raise LLMError("JD 内容为空")
+
+    if not profile.strip():
+        raise LLMError("简历内容为空")
+
+    # 简历在前、JD 在后：同一用户的简历固定，前缀稳定才能命中上下文缓存
+    user_content = f"【我的简历】\n{profile[:6000]}\n\n【JD原文】\n{jd[:2000]}"
+
+    raw = await call_llm(INTERVIEW_SYSTEM, user_content, timeout=180, max_tokens=8000)
+
+    try:
+        return InterviewPrep.model_validate_json(raw)
+    except ValidationError as e:
+        raise LLMError(f"模型输出不符合格式: {e}") from e

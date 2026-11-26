@@ -560,7 +560,7 @@ function jobCard(job) {
   return card;
 }
 
-function parseAnalysis(raw) {
+function parseStoredJson(raw) {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -886,16 +886,124 @@ function renderDetail(job) {
   if (job.note) body.append(detailSection("备注", el("p", "detail-pre", job.note)));
 
   /* AI 分析全文 */
-  const analysis = parseAnalysis(job.analysis);
+  const analysis = parseStoredJson(job.analysis);
   if (analysis) {
     const wrap = el("div", "analysis");
     wrap.append(...renderAnalysisParts(analysis));
     body.append(detailSection("AI 分析", wrap));
   }
 
+  /* 面试准备 */
+  body.append(detailSection("面试准备", renderInterviewPrep(job)));
+
   const spacer = el("div", "detail-spacer");
   body.append(spacer);
 }
+
+/* ---------- 面试准备（详情页里的一块） ---------- */
+const BASIS_LABEL = { resume: "来自简历", jd: "来自 JD", general: "通用知识" };
+const STATUS_LABEL = { ok: "能答", gap: "答不上来", unknown: "不确定" };
+// gap 排最前：面试前时间有限，先攻最可能翻车的
+const STATUS_ORDER = { gap: 0, unknown: 1, ok: 2 };
+
+function renderInterviewPrep(job) {
+  const wrap = el("div", "prep");
+
+  const prep = parseStoredJson(job.interview_prep);
+  if (!prep || !Array.isArray(prep.questions) || prep.questions.length === 0) {
+    wrap.append(el("p", "hint",
+      "按这份 JD 和你的简历，预测这场面试会问什么，并标出你现在答不上来的。"));
+    const btn = el("button", "primary small", "生成面试题（约 20-30 秒）");
+    btn.addEventListener("click", () => generatePrep(job.id, btn, false));
+    wrap.append(btn);
+    return wrap;
+  }
+
+  /* 生成时间 + 重新生成 */
+  const head = el("div", "prep-head");
+  head.append(el("span", "muted",
+    `${prep.questions.length} 道题 · 生成于 ${formatDateTime(job.interview_prep_at)}`));
+  const again = el("button", "ghost small", "重新生成");
+  again.addEventListener("click", () => generatePrep(job.id, again, true));
+  head.append(again);
+  wrap.append(head);
+
+  /* 要补的点 */
+  if (Array.isArray(prep.gaps_summary) && prep.gaps_summary.length) {
+    wrap.append(el("h3", "prep-sub", "面试前先补这些"));
+    const list = el("ol", "prep-gaps");
+    for (const gap of prep.gaps_summary) list.append(el("li", null, gap));
+    wrap.append(list);
+  }
+
+  /* 准备建议 */
+  if (prep.prep_advice) {
+    wrap.append(el("h3", "prep-sub", "怎么用这份准备"));
+    wrap.append(el("p", "prep-advice", prep.prep_advice));
+  }
+
+  /* 题目：gap 优先 */
+  wrap.append(el("h3", "prep-sub", "预测题"));
+  const questions = [...prep.questions].sort(
+    (a, b) => (STATUS_ORDER[a.your_status] ?? 9) - (STATUS_ORDER[b.your_status] ?? 9)
+  );
+
+  for (const q of questions) {
+    wrap.append(questionCard(q));
+  }
+
+  return wrap;
+}
+
+function questionCard(q) {
+  const card = el("div", `q-card q-${q.your_status}`);
+
+  const head = el("div", "q-head");
+  head.append(el("span", `q-status q-status-${q.your_status}`,
+    STATUS_LABEL[q.your_status] || "不确定"));
+  head.append(el("span", `q-basis q-basis-${q.basis}`,
+    BASIS_LABEL[q.basis] || q.basis));
+  card.append(head);
+
+  card.append(el("p", "q-text", q.question));
+
+  if (q.basis_quote) {
+    card.append(el("p", "q-quote", `依据：${q.basis_quote}`));
+  }
+  if (q.why_asked) {
+    card.append(el("p", "q-why", `为什么问：${q.why_asked}`));
+  }
+
+  /* 参考答案默认收起：面试前想先自测，不想一眼看到答案 */
+  const answer = el("details", "q-answer");
+  answer.append(el("summary", null, "看参考答案"));
+  answer.append(el("p", "q-answer-text", q.reference_answer));
+  card.append(answer);
+
+  if (q.follow_up) {
+    card.append(el("p", "q-followup", `可能的追问：${q.follow_up}`));
+  }
+
+  return card;
+}
+
+async function generatePrep(jobId, btn, force) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "生成中…（约 20 秒）";
+
+  try {
+    const path = `/jobs/${jobId}/interview-prep${force ? "?force=true" : ""}`;
+    await api(path, { method: "POST" });
+    toast("面试准备已生成");
+    await openDetail(jobId);   // 重拉详情，渲染生成的题目
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 /* ---------- 助手（独立视图，不是弹窗） ---------- */
 let assistantBusy = false;
 

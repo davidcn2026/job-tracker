@@ -138,6 +138,7 @@ async def update_job(
     new_description = (job.description or "").strip()
     if new_description and new_description != old_description:
         await crud_job.clear_analysis(db, job)
+        await crud_job.clear_interview_prep(db, job)   # JD 变了，旧预测题也失效
         auto_analyze.schedule(job.id, current_user.id)
 
     return Resp(data=JobDetail.model_validate(job))
@@ -198,4 +199,3 @@ async def analyze_job(
         raise HTTPException(status_code=503, detail="AI 分析暂时不可用，请稍后重试") from None
 
     job = await crud_job.save_analysis(db, job, result)
-    return Resp(data=JobDetail.model_validate(job))

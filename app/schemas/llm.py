@@ -100,3 +100,36 @@ class JobDraft(BaseModel):
         ):
             self.salary_min, self.salary_max = self.salary_max, self.salary_min
         return self
+
+
+# ===== 面试准备 =====
+# 依据只有三种，**不允许"某公司往年考过"这类来源**：
+#   面经零散、过时、无法验证真伪，让模型"回忆"等于让它编。
+#   jd      来自岗位要求原文
+#   resume  来自用户简历原文（面试官最会深挖这部分，也最能验真）
+#   general 行业通用岗位知识（如 Python 后端的 GIL、索引、事务）
+Basis = Literal["jd", "resume", "general"]
+
+# ok      简历里有对应经历，能答
+# gap     简历里看不出相关能力，很可能答不上来 —— 用户要专攻的部分
+# unknown 无法从材料判断
+QuestionStatus = Literal["ok", "gap", "unknown"]
+
+
+class InterviewQuestion(BaseModel):
+    question: str = Field(min_length=1, max_length=300)
+    basis: Basis
+    # 依据原文：JD 或简历里的原句片段。basis=general 时留空。
+    # 有这一条，用户才能当场核对"这题是不是真从我的材料来的"。
+    basis_quote: str = ""
+    why_asked: str = Field(default="", max_length=300)
+    your_status: QuestionStatus = "unknown"
+    reference_answer: str = Field(min_length=1)
+    follow_up: str = Field(default="", max_length=300)
+
+
+class InterviewPrep(BaseModel):
+    questions: list[InterviewQuestion] = Field(default_factory=list)
+    # 要补的关键点（按优先级），给面试前定向突击用
+    gaps_summary: list[str] = Field(default_factory=list)
+    prep_advice: str = ""

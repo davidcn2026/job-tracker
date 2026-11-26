@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
 from app.schemas.job import JobIn, JobUpdate
-from app.schemas.llm import AnalysisResult
+from app.schemas.llm import AnalysisResult, InterviewPrep
 
 
 async def list_jobs(
@@ -123,6 +123,30 @@ async def clear_analysis(db: AsyncSession, job: Job) -> Job:
     job.verdict = None
     job.analysis = None
     job.analyzed_at = None
+
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+
+async def save_interview_prep(db: AsyncSession, job: Job, prep: InterviewPrep) -> Job:
+    """写入面试准备（JSON）。
+
+    存下来而不是每次现生成：生成一次约 20 秒、几千 token，
+    用户会反复回来复习，重复生成纯属浪费。
+    """
+    job.interview_prep = prep.model_dump_json()
+    job.interview_prep_at = datetime.now()
+
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+
+async def clear_interview_prep(db: AsyncSession, job: Job) -> Job:
+    """作废面试准备。JD 改了之后，原来生成的预测题就没有意义了。"""
+    job.interview_prep = None
+    job.interview_prep_at = None
 
     await db.commit()
     await db.refresh(job)

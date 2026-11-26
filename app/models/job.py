@@ -73,6 +73,11 @@ class Job(Base):
     # Boss直聘没有公开投递链接，投递入口常在 OfferShow / 官网，两者不能混填
     apply_url: Mapped[str | None] = mapped_column(String(500))
 
+    # 面试准备：预测问题 + 参考答案 + 弱点标注（JSON）
+    # 生成一次就存下来，用户会反复回来复习；JD 或简历变了才重新生成
+    interview_prep: Mapped[str | None] = mapped_column(Text)
+    interview_prep_at: Mapped[datetime | None] = mapped_column(DateTime)
+
     @property
     def has_description(self) -> bool:
         """列表接口不返回 JD 全文，但前端需要知道"有没有 JD"。
