@@ -43,6 +43,7 @@ const state = {
   statusFilter: "",
   query: '',
   groupBy: 'score',
+  activeGroup: 'all',
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -164,6 +165,7 @@ function resetUiState() {
   state.statusFilter = "";
   state.query = "";
   state.groupBy = "score";
+  state.activeGroup = "all";
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -338,13 +340,19 @@ async function refresh(silent = false) {
 
 /* ---------- 渲染 ---------- */
 /* 分组方式：按匹配度 / 按渠道。两者互斥，用工具栏的下拉切换。 */
+/* 岗位按匹配度分层。
+ * 分数区间与提示词里的分档完全一致——同一套标准，
+ * 避免"模型说可以投、界面说别投"。 */
+const SCORE_BANDS = [
+  { key: "focus", label: "重点投递", min: 75, hint: "值得为它专门准备" },
+  { key: "consider", label: "可考虑", min: 65, hint: "准备一下再投" },
+  { key: "mass", label: "海投", min: 50, hint: "顺手投，别花太多精力" },
+  { key: "skip", label: "不建议", min: 0, hint: "缺核心能力，先放一放" },
+  { key: "none", label: "未分析", min: null, hint: "先点「AI 分析」拿到分数" },
+];
+
+/* 分组维度：匹配度 / 招聘渠道。二者互斥，用工具栏下拉切换。 */
 const SOURCE_ORDER = ["Boss直聘", "本校", "自定义", "其他"];
-const SOURCE_HINT = {
-  Boss直聘: "App 内沟通投递",
-  本校: "校招 / 宣讲会 / 就业群",
-  自定义: "内推 / 官网 / 其它来源",
-  其他: "未归类",
-};
 
 function bandOf(job) {
   if (job.match_score == null) return "none";
@@ -354,84 +362,85 @@ function bandOf(job) {
   return "skip";
 }
 
-/* 按匹配度分桶，顺序固定（重点在最前） */
-function groupsByScore(jobs) {
-  const buckets = new Map(SCORE_BANDS.map((band) => [band.key, []]));
-  for (const job of jobs) buckets.get(bandOf(job)).push(job);
-
-  return SCORE_BANDS
-    .map((band) => ({
-      key: band.key,
-      label: band.label,
-      hint: band.hint,
-      className: `band-${band.key}`,
-      items: buckets.get(band.key),
-    }))
-    .filter((group) => group.items.length > 0);
+function sourceOf(job) {
+  return SOURCE_ORDER.includes(job.source) ? job.source : "其他";
 }
 
-/* 按招聘渠道分桶。渠道来自 job.source，是用户录入时选的枚举值。 */
-function groupsBySource(jobs) {
-  const buckets = new Map(SOURCE_ORDER.map((name) => [name, []]));
-  for (const job of jobs) {
-    const name = SOURCE_ORDER.includes(job.source) ? job.source : "其他";
-    buckets.get(name).push(job);
+/* 一个岗位在当前分组维度下属于哪一组 */
+function groupKeyOf(job) {
+  return state.groupBy === "source" ? sourceOf(job) : bandOf(job);
+}
+
+/* 当前维度下的所有分组定义（含全部） */
+function groupDefs() {
+  if (state.groupBy === "source") {
+    return SOURCE_ORDER.map((name) => ({ key: name, label: name }));
+  }
+  return SCORE_BANDS.map((band) => ({ key: band.key, label: band.label }));
+}
+
+/* 分数降序；未分析的排最后。同分时新录入的在前。 */
+function sortByScore(jobs) {
+  return [...jobs].sort((a, b) => {
+    const sa = a.match_score == null ? -1 : a.match_score;
+    const sb = b.match_score == null ? -1 : b.match_score;
+    if (sb !== sa) return sb - sa;
+    return b.id - a.id;
+  });
+}
+
+/* 横向滚动的分组 Tab：全部 + 各组（空组不显示，省横向空间） */
+function renderTabs(rows) {
+  const bar = $("#tab-bar");
+  bar.replaceChildren();
+
+  const defs = groupDefs();
+  const counts = new Map(defs.map((d) => [d.key, 0]));
+  for (const job of rows) {
+    const key = groupKeyOf(job);
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
 
-  return SOURCE_ORDER
-    .map((name) => ({
-      key: name,
-      label: name,
-      hint: SOURCE_HINT[name] || "",
-      className: "band-source",
-      items: buckets.get(name),
-    }))
-    .filter((group) => group.items.length > 0);
-}
+  // 选中组已经空了（比如切了维度）→ 回到「全部」
+  const keys = ["all", ...defs.filter((d) => counts.get(d.key) > 0).map((d) => d.key)];
+  if (!keys.includes(state.activeGroup)) state.activeGroup = "all";
 
-function groupBlock(group, open) {
-  const box = el("details", "band");
-  box.open = open;
+  const makeTab = (key, label, count) => {
+    const tab = el("button", `tab${state.activeGroup === key ? " active" : ""}`,
+      `${label} ${count}`);
+    tab.type = "button";
+    tab.dataset.key = key;
+    return tab;
+  };
 
-  const summary = el("summary", "band-head");
-  summary.append(el("span", `band-title ${group.className}`, group.label));
-  summary.append(el("span", "band-count", `${group.items.length} 个`));
-  if (group.hint) summary.append(el("span", "band-hint", group.hint));
-  box.append(summary);
-
-  const body = el("div", "band-body");
-  for (const job of group.items) body.append(jobCard(job));
-  box.append(body);
-
-  return box;
+  bar.append(makeTab("all", "全部", rows.length));
+  for (const def of defs) {
+    const count = counts.get(def.key) || 0;
+    if (count > 0) bar.append(makeTab(def.key, def.label, count));
+  }
 }
 
 function render() {
   const list = $("#list");
-  const rows = state.items;          // 筛选已经在服务端做了（status / source / q）
+  const rows = state.items;          // 筛选已在服务端做（status / q）
+
+  renderTabs(rows);
+
+  const visible = state.activeGroup === "all"
+    ? rows
+    : rows.filter((job) => groupKeyOf(job) === state.activeGroup);
 
   list.replaceChildren();
 
-  if (rows.length === 0) {
+  if (visible.length === 0) {
     list.append(el("p", "empty",
       state.query || state.statusFilter
         ? "没有符合条件的岗位，换个条件试试"
         : "还没有记录，点「+ 新增」开始"));
   } else {
-    const groups = state.groupBy === "source"
-      ? groupsBySource(rows)
-      : groupsByScore(rows);
-
-    // 默认只展开第一组，其余折叠（手机上不会一屏铺满）
-    let opened = false;
-    for (const group of groups) {
-      list.append(groupBlock(group, !opened));
-      opened = true;
-    }
+    // 默认按分数从高到低：用户最该先看的排在最上面
+    for (const job of sortByScore(visible)) list.append(jobCard(job));
   }
-
-  // 分层视图不用分页（分组 + 折叠已解决长列表问题）
-  $("#pager") && ($("#pager").hidden = true);
 
   /* 筛选提示：让"正在筛选/搜索"这件事可见，避免误以为数据丢了 */
   const hint = $("#filter-hint");
@@ -1142,7 +1151,17 @@ async function boot() {
   /* 分组方式：纯展示层，不需要请求后端 */
   $("#group-by").addEventListener("change", (event) => {
     state.groupBy = event.currentTarget.value;
+    state.activeGroup = "all";   // 换维度后回到「全部」，否则旧 key 在新维度里不存在
     render();
+  });
+
+  /* 分组 Tab：事件委托，Tab 是动态生成的 */
+  $("#tab-bar").addEventListener("click", (event) => {
+    const tab = event.target.closest("button.tab");
+    if (!tab) return;
+    state.activeGroup = tab.dataset.key;
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
   $("#btn-clear-filter").addEventListener("click", () => {

@@ -356,66 +356,6 @@ button.link:hover { filter: brightness(1.15); }
 .analysis .summary { color: var(--text); }
 .analysis .blocking li { color: var(--danger); }
 
-/* ============ 岗位分组（按匹配度分层）============ */
-/* 每组一个原生 details：可折叠、可键盘操作、零 JS */
-.band {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--card);
-  margin-bottom: 12px;
-  overflow: hidden;
-}
-
-.band-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  cursor: pointer;
-  user-select: none;
-  list-style: none;                /* 去掉默认三角 */
-}
-.band-head::-webkit-details-marker { display: none; }
-.band-head::before {
-  content: "▸";
-  color: var(--muted);
-  font-size: .8rem;
-  transition: transform .15s;
-}
-.band[open] > .band-head::before { transform: rotate(90deg); }
-
-.band-title {
-  font-weight: 700;
-  font-size: .95rem;
-}
-.band-focus     { color: var(--ok); }
-.band-consider  { color: var(--warn); }
-.band-mass      { color: var(--accent); }
-.band-skip      { color: var(--danger); }
-.band-none      { color: var(--muted); }
-
-.band-count {
-  font-size: .8rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.band-hint {
-  margin-left: auto;
-  font-size: .76rem;
-  color: var(--muted);
-  text-align: right;
-}
-@media (max-width: 480px) {
-  .band-hint { display: none; }   /* 窄屏放不下就藏掉，不影响功能 */
-}
-
-.band-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 0 12px 12px;
-}
 
 /* ============ 分页 ============ */
 /* 分层视图下不再使用（分组 + 折叠已经解决了长列表），保留样式以备将来 */
@@ -750,4 +690,39 @@ button.link:hover { filter: brightness(1.15); }
 
 
 /* 渠道分组的标题色 */
-.band-source { color: var(--accent); }
+
+/* ============ 分组 Tab（横向滚动） ============ */
+/* 手机屏幕上竖向空间宝贵、横向空间够用：
+   分组用横向滑动切换，比一层层折叠更符合直觉，也不占用列表高度。 */
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 16px 10px;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  scrollbar-width: none;            /* Firefox 隐藏滚动条 */
+  -webkit-overflow-scrolling: touch; /* iOS 惯性滚动 */
+}
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font-size: .85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  min-height: 36px;
+}
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.tab:active { transform: scale(.97); }
