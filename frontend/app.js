@@ -1061,6 +1061,98 @@ function renderInterviewPrep(job) {
   return wrap;
 }
 
+/* 只替换这一张卡片，并做滚动锚定。
+ *
+ * 为什么不能整页重渲染：用户可能正在往下做第二道题，
+ * 整页重渲染会把他滚回顶部，输入到一半的内容也会丢。
+ * 锚定做法：记录替换前卡片顶部的屏幕位置，替换后把滚动补偿回来，
+ * 这样"卡片在自己变高"，但用户的视口纹丝不动。 */
+function patchCard(card, question, record) {
+  /* 锚点选择：优先跟着用户正在输入的那个文本框。
+     理由——被评估的卡片会变高（多出结论和追问），它下面的一切都会下移。
+     如果用户此刻正在另一道题里打字，那段文字会从眼前跑掉；
+     而如果用户没在打字，让内容下移是可以接受的。
+     所以有焦点时钉住焦点，没焦点时才钉住被替换的卡片。 */
+  const active = document.activeElement;
+  const anchor =
+    active && active.tagName === "TEXTAREA" && !card.contains(active) ? active : card;
+
+  const beforeTop = anchor.getBoundingClientRect().top;
+  const next = questionCard(question, record);
+  card.replaceWith(next);
+  const afterTop = anchor.getBoundingClientRect().top;
+
+  // 补偿滚动，让锚点在视口里的位置保持不变
+  if (afterTop !== beforeTop) window.scrollBy(0, afterTop - beforeTop);
+  return next;
+}
+
+/* ---------- 草稿保护（未保存的修改不丢） ---------- */
+/* 每个 (岗位, 题目, 轮次) 一个 key，存在 localStorage。
+   手机上切后台/杀进程都不会丢，回到页面时提醒。 */
+function draftKey(hash, round) {
+  return `draft:${state.detailId}:${hash}:${round}`;
+}
+
+function readDraft(hash, round) {
+  try {
+    return localStorage.getItem(draftKey(hash, round));
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(hash, round, value) {
+  try {
+    localStorage.setItem(draftKey(hash, round), value);
+  } catch {
+    /* 隐私模式 / 配额满：降级，不阻塞操作 */
+  }
+}
+
+function clearDraft(hash, round) {
+  try {
+    localStorage.removeItem(draftKey(hash, round));
+  } catch {
+    /* 同上 */
+  }
+}
+
+function hasDraft(hash) {
+  return [0, 1, 2, 3].some((round) => readDraft(hash, round) !== null);
+}
+
+function pendingDrafts() {
+  const found = [];
+  const prefix = `draft:${state.detailId}:`;
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) {
+        const parts = key.split(":");
+        found.push({ hash: parts[2], round: Number(parts[3]) });
+      }
+    }
+  } catch {
+    /* 忽略 */
+  }
+  return found;
+}
+
+function remindUnsavedDrafts() {
+  const drafts = pendingDrafts();
+  if (!drafts.length) return;
+  showTopToast(`有 ${drafts.length} 处修改未保存，点对应题目的「保存」`);
+}
+
+/* 手机切后台再回来：把没保存的改动提醒出来。
+   草稿是每次输入就写进 localStorage 的，所以切后台/退出都不会丢。 */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.detailId) {
+    remindUnsavedDrafts();
+  }
+});
+
 /* 一张题卡。
  *
  * 结构分两层，**用分割线隔开**：
