@@ -126,6 +126,10 @@ class InterviewQuestion(BaseModel):
     your_status: QuestionStatus = "unknown"
     reference_answer: str = Field(min_length=1)
     follow_up: str = Field(default="", max_length=300)
+    # 这题的"必须提到"的要点（3~5 条）。
+    # 用户写完答案后由模型判断覆盖了哪几条 —— 掌握度由此量化，
+    # 不靠主观打分。老数据没有这个字段，默认空，可批量补齐。
+    key_points: list[str] = Field(default_factory=list)
 
 
 class InterviewPrep(BaseModel):
@@ -133,3 +137,29 @@ class InterviewPrep(BaseModel):
     # 要补的关键点（按优先级），给面试前定向突击用
     gaps_summary: list[str] = Field(default_factory=list)
     prep_advice: str = ""
+
+
+# ===== 回答评估（AI 语义匹配关键点）=====
+# 三档而不是"勾上/没勾上"：
+#   covered  提到了且正确
+#   wrong    提到了但理解错了 —— 纯关键词匹配发现不了，但面试里最致命
+#   missing  完全没提到
+class WrongPoint(BaseModel):
+    index: int = Field(ge=0)
+    why: str = Field(min_length=1)
+
+
+class AnswerEval(BaseModel):
+    covered: list[int] = Field(default_factory=list)
+    wrong: list[WrongPoint] = Field(default_factory=list)
+    missing: list[int] = Field(default_factory=list)
+    verdict: str = Field(default="", max_length=500)
+    # 还有下一层追问就给问题；第 3 层答完后为 None（收口）
+    next_question: str | None = Field(default=None, max_length=300)
+    next_layer: str | None = None      # fact / decision / boundary
+
+
+class KeyPointsResult(BaseModel):
+    """批量补齐关键点：points 按题目顺序对应，每项 3~5 条。"""
+
+    points: list[list[str]] = Field(default_factory=list)

@@ -10,7 +10,7 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.database_url,
-    echo=True,  # 可选，输出 SQL 日志
+    echo=settings.debug,  # 只有 DEBUG=true 才打 SQL，否则每条查询都刷屏
     pool_size=10,  # 设置连接池活跃的连接数
     max_overflow=20,  # 允许额外的连接数
 )

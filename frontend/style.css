@@ -947,3 +947,145 @@ button.link:hover { filter: brightness(1.15); }
   line-height: 1.8;
   white-space: pre-wrap;
 }
+
+/* ============ 面试练习（关键点 / 输入 / 追问） ============ */
+.q-practice {
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.q-practice-wrong { background: var(--danger-weak); color: var(--danger); border-color: transparent; }
+.q-practice-mastered { background: var(--ok-weak); color: var(--ok); border-color: transparent; }
+.q-practice-partial { background: var(--warn-weak); color: var(--warn); border-color: transparent; }
+
+/* 关键点清单：✓ 覆盖 / ✗ 说错 / · 漏掉 */
+.q-points {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: .84rem;
+  line-height: 1.6;
+}
+.q-point { display: flex; gap: 7px; align-items: flex-start; color: var(--muted); }
+.q-point-mark {
+  flex: 0 0 14px;
+  text-align: center;
+  font-weight: 700;
+}
+.q-point.ok { color: var(--text); }
+.q-point.ok .q-point-mark { color: var(--ok); }
+.q-point.wrong { color: var(--text); }
+.q-point.wrong .q-point-mark { color: var(--danger); }
+.q-point.missing .q-point-mark { color: var(--muted); }
+.q-point-why {
+  display: block;
+  margin-top: 3px;
+  padding: 6px 9px;
+  background: var(--danger-weak);
+  color: var(--danger);
+  border-radius: 7px;
+  font-size: .78rem;
+}
+
+/* 筛选 chips（复用 .tab 样式，但间距更小） */
+.prep-filter { display: flex; gap: 8px; flex-wrap: wrap; }
+.prep-filter .tab { font-size: .78rem; padding: 5px 12px; min-height: 32px; }
+
+.prep-needpoints {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+/* 练习区 */
+.practice {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.practice-history > summary {
+  cursor: pointer;
+  font-size: .78rem;
+  color: var(--accent);
+  list-style: none;
+}
+.practice-history > summary::-webkit-details-marker { display: none; }
+.practice-history > summary::before { content: "▸ "; }
+.practice-history[open] > summary::before { content: "▾ "; }
+
+.practice-round {
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+.practice-q { margin: 0 0 4px; font-size: .8rem; color: var(--muted); }
+.practice-a { margin: 0; font-size: .82rem; white-space: pre-wrap; }
+
+/* 待答的追问 */
+.practice-ask {
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: var(--accent-weak);
+  border-left: 3px solid var(--accent);
+}
+.practice-ask-layer {
+  display: inline-block;
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 5px;
+}
+.practice-ask-text {
+  margin: 0;
+  font-size: .88rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.practice-verdict {
+  margin: 0;
+  font-size: .82rem;
+  line-height: 1.7;
+  color: var(--muted);
+  padding: 8px 11px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.practice-form { display: flex; flex-direction: column; gap: 8px; }
+
+.practice-input {
+  width: 100%;
+  min-height: 76px;
+  padding: 11px 13px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: .86rem;
+  line-height: 1.65;
+  resize: vertical;
+  outline: none;
+}
+.practice-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.practice-actions { display: flex; gap: 8px; flex-wrap: wrap; }

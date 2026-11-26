@@ -46,6 +46,8 @@ const state = {
   activeGroup: 'all',
   detailId: null,
   detailJob: null,
+  answers: new Map(),
+  prepFilter: 'all',
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -174,6 +176,8 @@ function resetUiState() {
   state.activeGroup = "all";
   state.detailId = null;
   state.detailJob = null;
+  state.answers = new Map();
+  state.prepFilter = "all";
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -788,9 +792,14 @@ async function openDetail(jobId) {
   body.replaceChildren(el("p", "empty", "加载中…"));
 
   try {
-    const payload = await api(`/jobs/${jobId}`);
-    state.detailJob = payload.data;
-    renderDetail(payload.data);
+    // 详情和练习记录一起拿：练习状态决定每道题渲染成什么样子
+    const [detail, answers] = await Promise.all([
+      api(`/jobs/${jobId}`),
+      api(`/jobs/${jobId}/answers`),
+    ]);
+    state.detailJob = detail.data;
+    state.answers = new Map(answers.data.map((item) => [item.question_hash, item]));
+    renderDetail(detail.data);
   } catch (err) {
     body.replaceChildren(el("p", "empty", err.message));
   }
@@ -799,6 +808,8 @@ async function openDetail(jobId) {
 function closeDetail() {
   state.detailId = null;
   state.detailJob = null;
+  state.answers = new Map();
+  state.prepFilter = "all";
   setView("app");
 }
 
@@ -901,10 +912,35 @@ function renderDetail(job) {
 }
 
 /* ---------- 面试准备（详情页里的一块） ---------- */
+const LAYER_NAME = { 0: "原题", 1: "第 1 层 · 事实", 2: "第 2 层 · 决策", 3: "第 3 层 · 边界" };
+
 const BASIS_LABEL = { resume: "来自简历", jd: "来自 JD", general: "通用知识" };
 const STATUS_LABEL = { ok: "能答", gap: "答不上来", unknown: "不确定" };
 // gap 排最前：面试前时间有限，先攻最可能翻车的
 const STATUS_ORDER = { gap: 0, unknown: 1, ok: 2 };
+
+// 练习状态 → 展示
+const PRACTICE_LABEL = {
+  untried: "没练过",
+  tried: "练过",
+  partial: "部分掌握",
+  mastered: "已掌握",
+  wrong: "不会",
+};
+const PRACTICE_ORDER = { wrong: 0, tried: 1, partial: 2, untried: 3, mastered: 4 };
+
+/* 题目文本指纹（FNV-1a 32 位）。
+ * **必须和后端 services/interview.py 的 question_hash 完全一致**，
+ * 否则查不到作答记录。用 FNV-1a 而不是 sha256，
+ * 是因为 JS 里同步算 sha256 要用 SubtleCrypto（异步），很别扭。 */
+function questionHash(text) {
+  let hash = 0x811C9DC5;
+  for (const byte of new TextEncoder().encode(text)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
 
 function renderInterviewPrep(job) {
   const wrap = el("div", "prep");
@@ -919,14 +955,28 @@ function renderInterviewPrep(job) {
     return wrap;
   }
 
-  /* 生成时间 + 重新生成 */
+  /* 头部：统计 + 重新生成 */
   const head = el("div", "prep-head");
+  const records = [...state.answers.values()];
+  const practiced = records.filter((r) => r.status !== "untried").length;
   head.append(el("span", "muted",
-    `${prep.questions.length} 道题 · 生成于 ${formatDateTime(job.interview_prep_at)}`));
+    `${prep.questions.length} 道题 · 已练 ${practiced} 道 · 生成于 ${formatDateTime(job.interview_prep_at)}`));
   const again = el("button", "ghost small", "重新生成");
   again.addEventListener("click", () => generatePrep(job.id, again, true));
   head.append(again);
   wrap.append(head);
+
+  /* 没拆关键点就不能练，先给按钮 */
+  const missingPoints = prep.questions.filter((q) => !q.key_points || !q.key_points.length);
+  if (missingPoints.length) {
+    const tip = el("div", "prep-needpoints");
+    tip.append(el("span", "muted",
+      `还有 ${missingPoints.length} 道题没拆解关键点，拆完才能练（约 5 秒，不用重新生成整套）`));
+    const btn = el("button", "primary small", "拆解关键点");
+    btn.addEventListener("click", () => fillKeyPoints(job.id, btn));
+    tip.append(btn);
+    wrap.append(tip);
+  }
 
   /* 要补的点 */
   if (Array.isArray(prep.gaps_summary) && prep.gaps_summary.length) {
@@ -942,49 +992,251 @@ function renderInterviewPrep(job) {
     wrap.append(el("p", "prep-advice", prep.prep_advice));
   }
 
-  /* 题目：gap 优先 */
-  wrap.append(el("h3", "prep-sub", "预测题"));
-  const questions = [...prep.questions].sort(
-    (a, b) => (STATUS_ORDER[a.your_status] ?? 9) - (STATUS_ORDER[b.your_status] ?? 9)
-  );
+  /* 筛选：全部 / 待练 / 错题 */
+  const filterRow = el("div", "prep-filter");
+  for (const [key, label] of [["all", "全部"], ["todo", "待练"], ["wrong", "错题本"]]) {
+    const chip = el("button", `tab${state.prepFilter === key ? " active" : ""}`, label);
+    chip.type = "button";
+    chip.addEventListener("click", () => {
+      state.prepFilter = key;
+      renderDetail(state.detailJob);   // 只重渲染，不重新请求
+    });
+    filterRow.append(chip);
+  }
+  wrap.append(filterRow);
 
-  for (const q of questions) {
-    wrap.append(questionCard(q));
+  /* 题目：错题 → 练过 → 部分 → 没练 → 已掌握 */
+  const questions = [...prep.questions].sort((a, b) => {
+    const ra = state.answers.get(questionHash(a.question));
+    const rb = state.answers.get(questionHash(b.question));
+    const oa = PRACTICE_ORDER[ra?.status || "untried"] ?? 9;
+    const ob = PRACTICE_ORDER[rb?.status || "untried"] ?? 9;
+    if (oa !== ob) return oa - ob;
+    return (STATUS_ORDER[a.your_status] ?? 9) - (STATUS_ORDER[b.your_status] ?? 9);
+  });
+
+  let shown = 0;
+  for (const question of questions) {
+    const record = state.answers.get(questionHash(question.question));
+    const status = record?.status || "untried";
+
+    if (state.prepFilter === "todo" && status === "mastered") continue;
+    if (state.prepFilter === "wrong" && status !== "wrong") continue;
+
+    wrap.append(questionCard(question, record));
+    shown += 1;
+  }
+
+  if (shown === 0) {
+    wrap.append(el("p", "empty",
+      state.prepFilter === "wrong" ? "还没有错题，练过的题里没有标「我不会」的" : "没有符合筛选的题"));
   }
 
   return wrap;
 }
 
-function questionCard(q) {
-  const card = el("div", `q-card q-${q.your_status}`);
+function questionCard(question, record) {
+  const status = record?.status || "untried";
+  const card = el("div", `q-card q-${question.your_status}`);
 
   const head = el("div", "q-head");
-  head.append(el("span", `q-status q-status-${q.your_status}`,
-    STATUS_LABEL[q.your_status] || "不确定"));
-  head.append(el("span", `q-basis q-basis-${q.basis}`,
-    BASIS_LABEL[q.basis] || q.basis));
+  head.append(el("span", `q-status q-status-${question.your_status}`,
+    STATUS_LABEL[question.your_status] || "不确定"));
+  head.append(el("span", `q-basis q-basis-${question.basis}`,
+    BASIS_LABEL[question.basis] || question.basis));
+  head.append(el("span", `q-practice q-practice-${status}`,
+    PRACTICE_LABEL[status] || status));
   card.append(head);
 
-  card.append(el("p", "q-text", q.question));
+  card.append(el("p", "q-text", question.question));
 
-  if (q.basis_quote) {
-    card.append(el("p", "q-quote", `依据：${q.basis_quote}`));
+  if (question.basis_quote) {
+    card.append(el("p", "q-quote", `依据：${question.basis_quote}`));
   }
-  if (q.why_asked) {
-    card.append(el("p", "q-why", `为什么问：${q.why_asked}`));
+  if (question.why_asked) {
+    card.append(el("p", "q-why", `为什么问：${question.why_asked}`));
   }
 
-  /* 参考答案默认收起：面试前想先自测，不想一眼看到答案 */
+  /* 关键点：练过之后按 covered/wrong/missing 上色。
+   * 这就是"掌握度"的来源——可数的比值，不是主观打分。 */
+  if (question.key_points?.length) {
+    card.append(renderKeyPoints(question.key_points, record));
+  }
+
+  /* 参考答案默认收起：面试前想先自测 */
   const answer = el("details", "q-answer");
   answer.append(el("summary", null, "看参考答案"));
-  answer.append(el("p", "q-answer-text", q.reference_answer));
+  answer.append(el("p", "q-answer-text", question.reference_answer));
   card.append(answer);
 
-  if (q.follow_up) {
-    card.append(el("p", "q-followup", `可能的追问：${q.follow_up}`));
+  if (question.follow_up) {
+    card.append(el("p", "q-followup", `可能的追问：${question.follow_up}`));
   }
 
+  card.append(practiceBlock(question, record));
   return card;
+}
+
+function renderKeyPoints(points, record) {
+  const covered = new Set(record?.covered || []);
+  const wrongMap = new Map((record?.wrong || []).map((w) => [w.index, w.why]));
+
+  const box = el("ul", "q-points");
+  points.forEach((point, index) => {
+    let mark = " ";
+    let cls = "q-point";
+    if (covered.has(index)) { mark = "✓"; cls += " ok"; }
+    else if (wrongMap.has(index)) { mark = "✗"; cls += " wrong"; }
+    else if (record && record.status !== "untried") { mark = "·"; cls += " missing"; }
+
+    const item = el("li", cls);
+    item.append(el("span", "q-point-mark", mark));
+    item.append(el("span", null, point));
+    if (wrongMap.has(index)) {
+      item.append(el("span", "q-point-why", wrongMap.get(index)));
+    }
+    box.append(item);
+  });
+  return box;
+}
+
+function practiceBlock(question, record) {
+  const box = el("div", "practice");
+  const hash = questionHash(question.question);
+  const depth = record?.depth || 0;
+  const finished = Boolean(record?.finish_reason);
+  const pending = (record?.transcript || []).filter((item) => !item.answer);
+  const canPractice = question.key_points?.length > 0;
+
+  if (!canPractice) {
+    box.append(el("p", "hint", "先拆解关键点才能练这道题"));
+    return box;
+  }
+
+  /* 已完成的历史问答 */
+  const done = (record?.transcript || []).filter((item) => item.answer);
+  if (done.length > 1) {
+    const hist = el("details", "practice-history");
+    hist.append(el("summary", null, `已答 ${done.length} 轮（点开看）`));
+    for (const item of done.slice(1)) {
+      const row = el("div", "practice-round");
+      row.append(el("p", "practice-q", item.question));
+      row.append(el("p", "practice-a", item.answer));
+      hist.append(row);
+    }
+    box.append(hist);
+  }
+
+  /* 当前要答的追问（如果有） */
+  if (pending.length) {
+    const item = pending[pending.length - 1];
+    const ask = el("div", "practice-ask");
+    ask.append(el("span", "practice-ask-layer", LAYER_NAME[item.layer] || "追问"));
+    ask.append(el("p", "practice-ask-text", item.question));
+    box.append(ask);
+  }
+
+  /* 上一轮的评估结论 */
+  if (record?.verdict) {
+    box.append(el("p", "practice-verdict", record.verdict));
+  }
+
+  /* 输入区 */
+  const form = el("form", "practice-form");
+  const input = el("textarea", "practice-input");
+  input.rows = 3;
+  input.maxLength = 8000;
+  input.placeholder = pending.length
+    ? "针对上面的追问答，说具体一点"
+    : "先自己答一遍，别急着看参考答案";
+  input.value = record?.answer || "";
+  form.append(input);
+
+  const actions = el("div", "practice-actions");
+
+  const label = finished
+    ? "重新练一遍"
+    : depth === 0
+      ? "提交并追问 1/3"
+      : `提交并追问 ${depth + 1}/3`;
+
+  const submit = el("button", "primary small", label);
+  submit.type = "submit";
+  actions.append(submit);
+
+  if (record && record.status !== "wrong") {
+    const giveUp = el("button", "ghost small", "我不会");
+    giveUp.type = "button";
+    giveUp.addEventListener("click", () => markPractice(hash, "wrong"));
+    actions.append(giveUp);
+  }
+  if (record && record.status !== "mastered" && record.status !== "untried") {
+    const doneBtn = el("button", "ghost small", "已掌握");
+    doneBtn.type = "button";
+    doneBtn.addEventListener("click", () => markPractice(hash, "mastered"));
+    actions.append(doneBtn);
+  }
+
+  form.append(actions);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) {
+      toast("先写点东西再提交", true);
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = "评估中…";
+    try {
+      await api(`/jobs/${state.detailId}/answers`, {
+        method: "POST",
+        body: { question_hash: hash, answer: text },
+      });
+      await openDetail(state.detailId);
+    } catch (err) {
+      toast(err.message, true);
+      submit.disabled = false;
+      submit.textContent = label;
+    }
+  });
+
+  box.append(form);
+
+  if (finished) {
+    box.append(el("p", "hint", "这道题已练完 3 层追问。再提交会从头重新练。"));
+  }
+
+  return box;
+}
+
+
+async function markPractice(hash, status) {
+  // 「我不会」不调模型：模型必然判全部 missing，没必要花一次调用确认已知事实
+  try {
+    await api(`/jobs/${state.detailId}/answers/${hash}`, {
+      method: "PATCH",
+      body: { status },
+    });
+    await openDetail(state.detailId);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function fillKeyPoints(jobId, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "拆解中…";
+  try {
+    await api(`/jobs/${jobId}/interview-prep/key-points`, { method: "POST" });
+    toast("关键点已补齐");
+    await openDetail(jobId);
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 async function generatePrep(jobId, btn, force) {
@@ -996,7 +1248,7 @@ async function generatePrep(jobId, btn, force) {
     const path = `/jobs/${jobId}/interview-prep${force ? "?force=true" : ""}`;
     await api(path, { method: "POST" });
     toast("面试准备已生成");
-    await openDetail(jobId);   // 重拉详情，渲染生成的题目
+    await openDetail(jobId);
   } catch (err) {
     toast(err.message, true);
     btn.disabled = false;
