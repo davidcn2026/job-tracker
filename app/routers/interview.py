@@ -234,6 +234,7 @@ async def submit_answer(
             "wrong": [item.model_dump() for item in evaluation.wrong],
             "missing": evaluation.missing,
             "verdict": evaluation.verdict,
+            "answer": payload.answer,
             "next_question": evaluation.next_question,
             "next_layer": evaluation.next_layer,
             "depth": new_depth,

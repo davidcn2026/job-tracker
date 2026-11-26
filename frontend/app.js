@@ -48,6 +48,7 @@ const state = {
   detailJob: null,
   answers: new Map(),
   prepFilter: 'all',
+  grading: new Set(),
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -72,6 +73,24 @@ function toast(message, isError = false) {
   box.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { box.hidden = true; }, 2800);
+}
+
+/* 顶部小提示：3 秒自动消失，不打断输入、不移动视口。
+ * 用于"已评估/追问已就绪"这类异步结果——用户可能已经在做下一题了。 */
+let topToastTimer = null;
+function showTopToast(message) {
+  const box = $("#top-toast");
+  if (!box) return;
+  box.textContent = message;
+  box.hidden = false;
+  // 强制回流，让重复调用时过渡动画能重放
+  void box.offsetWidth;
+  box.classList.add("show");
+  clearTimeout(topToastTimer);
+  topToastTimer = setTimeout(() => {
+    box.classList.remove("show");
+    setTimeout(() => { box.hidden = true; }, 220);
+  }, 3000);
 }
 
 function errorText(payload, fallback) {
@@ -178,6 +197,7 @@ function resetUiState() {
   state.detailJob = null;
   state.answers = new Map();
   state.prepFilter = "all";
+  state.grading.clear();
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -810,6 +830,7 @@ function closeDetail() {
   state.detailJob = null;
   state.answers = new Map();
   state.prepFilter = "all";
+  state.grading.clear();
   setView("app");
 }
 
@@ -1037,7 +1058,10 @@ function renderInterviewPrep(job) {
 
 function questionCard(question, record) {
   const status = record?.status || "untried";
+  const hash = questionHash(question.question);
   const card = el("div", `q-card q-${question.your_status}`);
+  if (state.grading.has(hash)) card.classList.add("grading");
+  card.dataset.hash = hash;
 
   const head = el("div", "q-head");
   head.append(el("span", `q-status q-status-${question.your_status}`,
@@ -1100,6 +1124,32 @@ function renderKeyPoints(points, record) {
   return box;
 }
 
+/* 只替换这一张卡片，并做滚动锚定。
+ *
+ * 为什么不能整页重渲染：用户可能正在往下做第二道题，
+ * 整页重渲染会把他滚回顶部，输入到一半的内容也会丢。
+ * 锚定做法：记录替换前卡片顶部的屏幕位置，替换后把滚动补偿回来，
+ * 这样"卡片在自己变高"，但用户的视口纹丝不动。 */
+function patchCard(card, question, record) {
+  /* 锚点选择：优先跟着用户正在输入的那个文本框。
+     理由——被评估的卡片会变高（多出结论和追问），它下面的一切都会下移。
+     如果用户此刻正在另一道题里打字，那段文字会从眼前跑掉；
+     而如果用户没在打字，让内容下移是可以接受的。
+     所以有焦点时钉住焦点，没焦点时才钉住被替换的卡片。 */
+  const active = document.activeElement;
+  const anchor =
+    active && active.tagName === "TEXTAREA" && !card.contains(active) ? active : card;
+
+  const beforeTop = anchor.getBoundingClientRect().top;
+  const next = questionCard(question, record);
+  card.replaceWith(next);
+  const afterTop = anchor.getBoundingClientRect().top;
+
+  // 补偿滚动，让锚点在视口里的位置保持不变
+  if (afterTop !== beforeTop) window.scrollBy(0, afterTop - beforeTop);
+  return next;
+}
+
 function practiceBlock(question, record) {
   const box = el("div", "practice");
   const hash = questionHash(question.question);
@@ -1107,13 +1157,14 @@ function practiceBlock(question, record) {
   const finished = Boolean(record?.finish_reason);
   const pending = (record?.transcript || []).filter((item) => !item.answer);
   const canPractice = question.key_points?.length > 0;
+  const grading = state.grading.has(hash);
 
   if (!canPractice) {
-    box.append(el("p", "hint", "先拆解关键点才能练这道题"));
+    box.append(el("p", "hint", "这道题还没拆出关键点，点上面的「拆解关键点」"));
     return box;
   }
 
-  /* 已完成的历史问答 */
+  /* 已完成的历史问答（第一轮就是原题，不用重复展示） */
   const done = (record?.transcript || []).filter((item) => item.answer);
   if (done.length > 1) {
     const hist = el("details", "practice-history");
@@ -1150,30 +1201,36 @@ function practiceBlock(question, record) {
     ? "针对上面的追问答，说具体一点"
     : "先自己答一遍，别急着看参考答案";
   input.value = record?.answer || "";
+  if (grading) input.disabled = true;
   form.append(input);
 
   const actions = el("div", "practice-actions");
 
-  const label = finished
-    ? "重新练一遍"
-    : depth === 0
-      ? "提交并追问 1/3"
-      : `提交并追问 ${depth + 1}/3`;
+  const label = grading
+    ? "评估中…"
+    : finished
+      ? "重新练一遍"
+      : depth === 0
+        ? "提交并追问 1/3"
+        : `提交并追问 ${depth + 1}/3`;
 
   const submit = el("button", "primary small", label);
   submit.type = "submit";
+  submit.disabled = grading;
   actions.append(submit);
 
   if (record && record.status !== "wrong") {
     const giveUp = el("button", "ghost small", "我不会");
     giveUp.type = "button";
-    giveUp.addEventListener("click", () => markPractice(hash, "wrong"));
+    giveUp.disabled = grading;
+    giveUp.addEventListener("click", () => markPractice(question, "wrong"));
     actions.append(giveUp);
   }
   if (record && record.status !== "mastered" && record.status !== "untried") {
     const doneBtn = el("button", "ghost small", "已掌握");
     doneBtn.type = "button";
-    doneBtn.addEventListener("click", () => markPractice(hash, "mastered"));
+    doneBtn.disabled = grading;
+    doneBtn.addEventListener("click", () => markPractice(question, "mastered"));
     actions.append(doneBtn);
   }
 
@@ -1183,42 +1240,72 @@ function practiceBlock(question, record) {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) {
-      toast("先写点东西再提交", true);
+      showTopToast("先写点东西再提交");
       return;
     }
+
+    /* 标记这一题在评估中，但**不锁其它题**——用户可以去答下一道 */
+    state.grading.add(hash);
     submit.disabled = true;
     submit.textContent = "评估中…";
+    input.disabled = true;
+    box.parentElement?.classList.add("grading");
+
     try {
-      await api(`/jobs/${state.detailId}/answers`, {
+      const result = await api(`/jobs/${state.detailId}/answers`, {
         method: "POST",
         body: { question_hash: hash, answer: text },
       });
-      await openDetail(state.detailId);
+      state.answers.set(hash, result.data);
+
+      /* 关键顺序：先清掉"评估中"，再重渲染这张卡片。
+         否则新卡片仍会渲染成 disabled（questionCard 会读 state.grading）。 */
+      state.grading.delete(hash);
+
+      /* 只替换当前卡片 + 滚动锚定：用户正在做下一题时，视口不能动 */
+      const card = document.querySelector(`.q-card[data-hash="${hash}"]`);
+      if (card) patchCard(card, question, result.data);
+
+      const covered = result.data.covered.length;
+      const total = result.data.total_points;
+      showTopToast(
+        result.data.next_question
+          ? `已评估：覆盖 ${covered}/${total} · 新追问已就绪`
+          : `已评估：覆盖 ${covered}/${total} · 本题已练完`
+      );
     } catch (err) {
+      state.grading.delete(hash);
+      box.parentElement?.classList.remove("grading");
       toast(err.message, true);
       submit.disabled = false;
       submit.textContent = label;
+      input.disabled = false;
     }
   });
 
   box.append(form);
 
   if (finished) {
-    box.append(el("p", "hint", "这道题已练完 3 层追问。再提交会从头重新练。"));
+    box.append(el("p", "hint", "这道题已练完 3 层追问，再提交会从头重新练。"));
   }
 
   return box;
 }
 
 
-async function markPractice(hash, status) {
+async function markPractice(question, status) {
   // 「我不会」不调模型：模型必然判全部 missing，没必要花一次调用确认已知事实
+  const hash = questionHash(question.question);
+  const card = document.querySelector(`.q-card[data-hash="${hash}"]`);
   try {
-    await api(`/jobs/${state.detailId}/answers/${hash}`, {
+    const result = await api(`/jobs/${state.detailId}/answers/${hash}`, {
       method: "PATCH",
       body: { status },
     });
-    await openDetail(state.detailId);
+    const record = { ...(state.answers.get(hash) || {}), ...result.data };
+    state.answers.set(hash, record);
+    if (card) patchCard(card, question, record);
+    showTopToast(status === "wrong" ? "已加入错题本" : "已标记为掌握");
   } catch (err) {
     toast(err.message, true);
   }

@@ -1089,3 +1089,53 @@ button.link:hover { filter: brightness(1.15); }
 }
 
 .practice-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ============ 顶部小提示（评估完成 / 追问就绪） ============ */
+/* 为什么放顶部且只停 3 秒：
+   评估是异步的，用户可能已经在做下一道题。底部 toast 容易被输入框挡住，
+   而任何"整页刷新"都会把用户滚到别处——所以只在顶部飘一条，
+   既不打断输入，也不移动视口。 */
+.top-toast {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translate(-50%, -12px);
+  z-index: 200;
+  max-width: min(92vw, 460px);
+  padding: 9px 15px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ok) 92%, #000);
+  color: #fff;
+  font-size: .82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: 0 6px 22px rgb(0 0 0 / 32%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.top-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* 正在评估的那道题：左侧转圈条，让"这一题在跑"变成可见状态 */
+.q-card.grading {
+  position: relative;
+  overflow: hidden;
+}
+.q-card.grading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--accent), transparent);
+  animation: grading-pulse 1s ease-in-out infinite;
+}
+@keyframes grading-pulse {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
