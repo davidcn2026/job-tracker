@@ -1225,3 +1225,24 @@ button.link:hover { filter: brightness(1.15); }
   font-size: .78rem;
   line-height: 1.65;
 }
+
+/* ============ 关键点折叠块（摘要带数字） ============ */
+/* 为什么要折叠：5 条要点在手机上就是 12~15 行；
+   而且它列在输入框上方，答题前就把答案要点给看了，
+   那就不是 recall 练习。摘要用"覆盖 2/5 · 说错 1"保留一眼可见的信息。 */
+.q-points-box {
+  margin: 2px 0;
+}
+.q-points-box > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--accent);
+  font-size: .78rem;
+  font-weight: 600;
+  padding: 3px 0;
+}
+.q-points-box > summary::-webkit-details-marker { display: none; }
+.q-points-box > summary::before { content: "\25B8 "; }
+.q-points-box[open] > summary::before { content: "\25BE "; }
+.q-points-box > .q-points { margin-top: 6px; }

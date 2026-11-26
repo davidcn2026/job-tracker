@@ -1097,10 +1097,17 @@ function questionCard(question, record) {
     card.append(meta);
   }
 
-  /* 关键点：练过之后按 covered/wrong/missing 上色。
-   * 这就是"掌握度"的来源——可数的比值，不是主观打分。 */
+  /* 关键点：默认折叠，但**摘要上带数字**。
+     不折叠的两个问题：
+       1. 5 条要点在手机上就是 12~15 行，比"依据"还占地方；
+       2. 更严重——它列在输入框上方，答题前就把答案要点给看了，
+          那就不是 recall 练习，而是看着答案抄。
+     摘要写"覆盖 2/5 · 说错 1"，一眼知道练得怎么样，明细点开再看。 */
   if (question.key_points?.length) {
-    card.append(renderKeyPoints(question.key_points, record));
+    const pointsBox = el("details", "q-points-box");
+    pointsBox.append(el("summary", null, keyPointsSummary(question, record)));
+    pointsBox.append(renderKeyPoints(question.key_points, record));
+    card.append(pointsBox);
   }
 
   /* 参考答案默认收起：面试前想先自测 */
@@ -1115,6 +1122,19 @@ function questionCard(question, record) {
 
   card.append(practiceBlock(question, record));
   return card;
+}
+
+/* 关键点折叠块的摘要：没练过只说条数，练过就报覆盖数字 */
+function keyPointsSummary(question, record) {
+  const total = question.key_points.length;
+  if (!record || record.status === "untried") {
+    return `关键点（${total} 条）`;
+  }
+  const covered = (record.covered || []).length;
+  const wrong = (record.wrong || []).length;
+  return wrong
+    ? `关键点 · 覆盖 ${covered}/${total} · 说错 ${wrong}`
+    : `关键点 · 覆盖 ${covered}/${total}`;
 }
 
 function renderKeyPoints(points, record) {
