@@ -277,6 +277,16 @@
   <div class="detail-body" id="detail-body"></div>
 </section>
 
+<!-- ========== 面试复盘（独立视图，表单较长，不适合弹窗） ========== -->
+<section id="view-interview" class="view interview-view" hidden>
+  <header class="detail-head">
+    <button type="button" class="ghost small" id="btn-interview-back">← 返回</button>
+    <strong class="interview-form-title" id="interview-form-title">记录一次面试</strong>
+    <button type="button" class="primary small" id="btn-interview-save">保存</button>
+  </header>
+  <div class="detail-body" id="interview-form-body"></div>
+</section>
+
 <!-- ========== 助手（独立视图，不是弹窗覆盖） ========== -->
 <!-- 用 view 而不是 dialog：助手是一个"页面"，有返回动作。
      弹窗会盖住岗位列表，用户失去了"我在哪"的空间感。 -->

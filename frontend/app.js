@@ -51,6 +51,9 @@ const state = {
   grading: new Set(),
   roundView: new Map(),
   editing: new Set(),
+  interviews: [],
+  interviewJobId: null,
+  interviewEditId: null,
   editId: null,
   analyzing: new Set(),
   pollTimer: null,
@@ -171,6 +174,7 @@ function setView(name) {
   $("#view-app").hidden = name !== "app";
   $("#view-assistant").hidden = name !== "assistant";
   $("#view-detail").hidden = name !== "detail";
+  $("#view-interview").hidden = name !== "interview";
 }
 
 function showApp() {
@@ -202,6 +206,9 @@ function resetUiState() {
   state.grading.clear();
   state.roundView = new Map();
   state.editing.clear();
+  state.interviews = [];
+  state.interviewJobId = null;
+  state.interviewEditId = null;
   state.items = [];
   state.analyzing.clear();
   state.editId = null;
@@ -817,12 +824,14 @@ async function openDetail(jobId) {
 
   try {
     // 详情和练习记录一起拿：练习状态决定每道题渲染成什么样子
-    const [detail, answers] = await Promise.all([
+    const [detail, answers, interviews] = await Promise.all([
       api(`/jobs/${jobId}`),
       api(`/jobs/${jobId}/answers`),
+      api(`/jobs/${jobId}/interviews`),
     ]);
     state.detailJob = detail.data;
     state.answers = new Map(answers.data.map((item) => [item.question_hash, item]));
+    state.interviews = interviews.data;
     renderDetail(detail.data);
   } catch (err) {
     body.replaceChildren(el("p", "empty", err.message));
@@ -931,6 +940,9 @@ function renderDetail(job) {
 
   /* 面试准备 */
   body.append(detailSection("面试准备", renderInterviewPrep(job)));
+
+  /* 面试复盘：真实被问到的问题 */
+  body.append(detailSection("面试复盘", renderInterviewSection(job)));
 
   const spacer = el("div", "detail-spacer");
   body.append(spacer);
@@ -1630,6 +1642,303 @@ async function generatePrep(jobId, btn, force) {
   }
 }
 
+/* ---------- 面试复盘：详情页里的记录列表 + 录入表单 ---------- */
+/* 这是产品里唯一"真实发生过"的数据：预测题是模型猜的、面经是别人说的，
+   只有这里记的是你亲耳听到的问题。攒够之后就是自己的题库。 */
+
+const OUTCOME_LABEL = {
+  pending: "待结果",
+  passed: "通过",
+  failed: "挂了",
+  no_reply: "没回音",
+};
+const PERFORMANCE_LABEL = { good: "答得好", ok: "一般", bad: "答不上来" };
+
+/* 详情页里的「面试记录」区块 */
+function renderInterviewSection(job) {
+  const wrap = el("div", "iv");
+  const records = state.interviews || [];
+
+  const head = el("div", "prep-head");
+  const totalQuestions = records.reduce((sum, r) => sum + r.questions.length, 0);
+  head.append(el("span", "muted prep-meta",
+    records.length
+      ? `已记录 ${records.length} 次 · ${totalQuestions} 个真实问题`
+      : "面试完把被问到的问题记下来，比任何面经都准"));
+  const add = el("button", "primary small", "记录一次面试");
+  add.addEventListener("click", () => openInterviewForm(job.id, null));
+  head.append(add);
+  wrap.append(head);
+
+  for (const record of records) {
+    wrap.append(interviewRecordCard(job, record));
+  }
+
+  return wrap;
+}
+
+function interviewRecordCard(job, record) {
+  const card = el("div", "iv-record");
+
+  const head = el("div", "iv-head");
+  head.append(el("span", `iv-outcome iv-outcome-${record.outcome}`,
+    OUTCOME_LABEL[record.outcome] || record.outcome));
+  head.append(el("span", "iv-date",
+    record.interview_at ? formatDateTime(record.interview_at).slice(0, 16) : "未填时间"));
+  head.append(el("span", "muted", `${record.questions.length} 个问题`));
+  card.append(head);
+
+  if (record.summary) {
+    card.append(el("p", "iv-summary", record.summary));
+  }
+
+  /* 问题列表：默认收起，展开看每题的答案与差距 */
+  if (record.questions.length) {
+    const list = el("details", "iv-questions");
+    list.append(el("summary", null, "看这次问了什么"));
+
+    record.questions.forEach((item, index) => {
+      const row = el("div", "iv-q");
+      const rowHead = el("div", "iv-q-head");
+      rowHead.append(el("span", `iv-perf iv-perf-${item.performance}`,
+        PERFORMANCE_LABEL[item.performance] || item.performance));
+      rowHead.append(el("span", "iv-q-index", `第 ${index + 1} 题`));
+      row.append(rowHead);
+
+      row.append(el("p", "iv-q-text", item.question));
+      if (item.my_answer) {
+        row.append(el("p", "iv-q-answer", `我当时答：${item.my_answer}`));
+      }
+      if (item.gap) {
+        row.append(el("p", "iv-q-gap", `该补：${item.gap}`));
+      }
+      if (item.follow_up) {
+        row.append(el("p", "iv-q-follow", `追问：${item.follow_up}`));
+      }
+      list.append(row);
+    });
+    card.append(list);
+  }
+
+  const actions = el("div", "iv-actions");
+  const edit = el("button", "ghost small", "编辑");
+  edit.addEventListener("click", () => openInterviewForm(job.id, record));
+  const del = el("button", "ghost small", "删除");
+  del.addEventListener("click", () => deleteInterview(job.id, record.id));
+  actions.append(edit, del);
+  card.append(actions);
+
+  return card;
+}
+
+async function deleteInterview(jobId, recordId) {
+  const ok = window.confirm("删除这条面试记录？里面记的问题也会一起删掉。");
+  if (!ok) return;
+  try {
+    await api(`/jobs/${jobId}/interviews/${recordId}`, { method: "DELETE" });
+    await reloadInterviews(jobId);
+    renderDetail(state.detailJob);
+    showTopToast("已删除");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function reloadInterviews(jobId) {
+  const payload = await api(`/jobs/${jobId}/interviews`);
+  state.interviews = payload.data;
+}
+
+/* ---------- 录入 / 编辑表单 ---------- */
+
+function openInterviewForm(jobId, record) {
+  state.interviewEditId = record ? record.id : null;
+  state.interviewJobId = jobId;
+  setView("interview");
+
+  $("#interview-form-title").textContent = record ? "修改面试记录" : "记录一次面试";
+  const body = $("#interview-form-body");
+  body.replaceChildren();
+
+  /* 面试时间 */
+  body.append(field("面试时间（可空）", (() => {
+    const input = el("input", "iv-input");
+    input.type = "datetime-local";
+    input.id = "iv-at";
+    input.value = toLocalInput(record?.interview_at || new Date().toISOString());
+    return input;
+  })()));
+
+  /* 结果 */
+  body.append(field("结果", (() => {
+    const select = el("select", "iv-input");
+    select.id = "iv-outcome";
+    for (const [key, label] of Object.entries(OUTCOME_LABEL)) {
+      const option = el("option", null, label);
+      option.value = key;
+      if ((record?.outcome || "pending") === key) option.selected = true;
+      select.append(option);
+    }
+    return select;
+  })()));
+
+  /* 问题列表 */
+  body.append(el("h3", "prep-sub", "被问到的问题"));
+  const listBox = el("div", "iv-form-list");
+  listBox.id = "iv-form-list";
+  body.append(listBox);
+
+  const initial = record?.questions?.length ? record.questions : [{}];
+  for (const item of initial) listBox.append(questionRow(item));
+
+  const addRow = el("button", "ghost small", "＋ 再加一题");
+  addRow.type = "button";
+  addRow.addEventListener("click", () => {
+    listBox.append(questionRow({}));
+    listBox.lastElementChild.querySelector("textarea")?.focus();
+  });
+  body.append(addRow);
+
+  /* 整体反思 */
+  body.append(field("整体反思（可空）", (() => {
+    const textarea = el("textarea", "iv-input");
+    textarea.id = "iv-summary";
+    textarea.rows = 3;
+    textarea.placeholder = "哪里答得虚、下次要注意什么";
+    textarea.value = record?.summary || "";
+    return textarea;
+  })()));
+
+  $("#btn-interview-save").disabled = false;
+  $("#btn-interview-save").textContent = "保存";
+  body.scrollTop = 0;
+  window.scrollTo({ top: 0 });
+}
+
+function questionRow(item) {
+  const box = el("div", "iv-form-q");
+
+  const head = el("div", "iv-form-q-head");
+  head.append(el("span", "iv-form-q-title", "问题"));
+  const del = el("button", "ghost small", "移除");
+  del.type = "button";
+  del.addEventListener("click", () => {
+    const list = $("#iv-form-list");
+    if (list.childElementCount <= 1) {
+      showTopToast("至少留一道题（不想记可以直接取消）");
+      return;
+    }
+    box.remove();
+  });
+  head.append(del);
+  box.append(head);
+
+  const question = el("textarea", "iv-input iv-q-input");
+  question.rows = 2;
+  question.placeholder = "面试官的原话（尽量照原样写）";
+  question.value = item.question || "";
+  box.append(question);
+
+  const perfRow = el("div", "iv-perf-row");
+  perfRow.append(el("span", "iv-perf-label", "答得怎样"));
+  const perf = el("select", "iv-input iv-perf-select");
+  for (const [key, label] of Object.entries(PERFORMANCE_LABEL)) {
+    const option = el("option", null, label);
+    option.value = key;
+    if ((item.performance || "ok") === key) option.selected = true;
+    perf.append(option);
+  }
+  perfRow.append(perf);
+  box.append(perfRow);
+
+  const answer = el("textarea", "iv-input");
+  answer.rows = 2;
+  answer.placeholder = "我当时怎么答的（可空）";
+  answer.value = item.my_answer || "";
+  box.append(answer);
+
+  const gap = el("textarea", "iv-input");
+  gap.rows = 2;
+  gap.placeholder = "该补什么（可空）";
+  gap.value = item.gap || "";
+  box.append(gap);
+
+  const follow = el("input", "iv-input");
+  follow.placeholder = "追问（可空）";
+  follow.maxLength = 1000;
+  follow.value = item.follow_up || "";
+  box.append(follow);
+
+  box.dataset.question = "1";
+  return box;
+}
+
+function collectInterview() {
+  const questions = [];
+  for (const box of $("#iv-form-list").children) {
+    const question = box.querySelector(".iv-q-input").value.trim();
+    if (!question) continue;   // 空行直接忽略，不报错
+    const textareas = box.querySelectorAll("textarea");
+    questions.push({
+      question,
+      performance: box.querySelector(".iv-perf-select").value,
+      my_answer: textareas[1]?.value.trim() || "",
+      gap: textareas[2]?.value.trim() || "",
+      follow_up: box.querySelector("input").value.trim(),
+    });
+  }
+  const at = $("#iv-at").value;
+  return {
+    interview_at: at ? new Date(at).toISOString() : null,
+    outcome: $("#iv-outcome").value,
+    summary: $("#iv-summary").value.trim(),
+    questions,
+  };
+}
+
+async function saveInterview() {
+  const btn = $("#btn-interview-save");
+  const payload = collectInterview();
+
+  if (!payload.questions.length) {
+    showTopToast("至少记一道题");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "保存中…";
+  try {
+    const jobId = state.interviewJobId;
+    if (state.interviewEditId) {
+      await api(`/jobs/${jobId}/interviews/${state.interviewEditId}`, {
+        method: "PATCH",
+        body: payload,
+      });
+    } else {
+      await api(`/jobs/${jobId}/interviews`, { method: "POST", body: payload });
+    }
+    await reloadInterviews(jobId);
+    // 服务端可能会把岗位状态推进到"已面试"，重新拉一次详情
+    const detail = await api(`/jobs/${jobId}`);
+    state.detailJob = detail.data;
+    setView("detail");
+    renderDetail(state.detailJob);
+    showTopToast(`已记录 ${payload.questions.length} 个真实问题`);
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+    btn.textContent = "保存";
+  }
+}
+
+/* 一个「标签 + 控件」的包装 */
+function field(label, control) {
+  const wrap = el("label", "iv-field");
+  wrap.append(el("span", "iv-field-label", label));
+  wrap.append(control);
+  return wrap;
+}
+
 /* ---------- 助手（独立视图，不是弹窗） ---------- */
 let assistantBusy = false;
 
@@ -1914,6 +2223,13 @@ async function boot() {
   $("#btn-profile-clear").addEventListener("click", clearProfile);
 
   /* 助手（全局唯一） */
+  /* 面试复盘表单 */
+  $("#btn-interview-back").addEventListener("click", () => {
+    setView("detail");
+    if (state.detailJob) renderDetail(state.detailJob);
+  });
+  $("#btn-interview-save").addEventListener("click", saveInterview);
+
   /* 岗位详情 */
   $("#btn-detail-back").addEventListener("click", closeDetail);
   $("#btn-detail-edit").addEventListener("click", () => {

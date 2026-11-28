@@ -78,7 +78,7 @@ const win = {
 const src = fs.readFileSync("frontend/app.js", "utf8");
 const factory = new Function(
   "document", "window", "localStorage", "TextEncoder", "console", "fetch", "navigator", "location",
-  src + "\nreturn { renderDetail, renderInterviewPrep, questionCard, practiceBlock, state, questionHash };"
+  src + "\nreturn { renderDetail, renderInterviewPrep, questionCard, practiceBlock, state, questionHash, renderInterviewSection, openInterviewForm, collectInterview };"
 );
 
 let api;
@@ -163,6 +163,24 @@ api.state.answers = new Map([
 /* 造两份未保存的草稿，覆盖草稿提醒/角标路径 */
 localStorage.setItem("draft:15:" + hash + ":1", "改过的答案");
 
+/* 造一条面试复盘记录，覆盖「详情页面试记录区块」的渲染 */
+api.state.interviews = [
+  {
+    id: 1,
+    job_id: 15,
+    interview_at: "2026-11-27T14:00:00",
+    round_no: 1,
+    outcome: "failed",
+    summary: "整体偏紧，Redis 一致性答虚了。",
+    created_at: "2026-11-27T20:00:00",
+    updated_at: "2026-11-27T20:00:00",
+    questions: [
+      { id: 1, question: "Agent Harness 的权限怎么设计的？", my_answer: "说了三级闸门。", performance: "ok", gap: "凭证生命周期", follow_up: "路径穿越怎么防？" },
+      { id: 2, question: "Redis 缓存不一致怎么处理？", my_answer: "只说了先删缓存。", performance: "bad", gap: "延迟双删 + TTL", follow_up: null },
+    ],
+  },
+];
+
 const cases = [
   ["有练习记录 + 草稿", job],
   ["没有 interview_prep", { ...job, interview_prep: null, interview_prep_at: null }],
@@ -185,6 +203,17 @@ for (const [name, data] of cases) {
     failed += 1;
     console.log(`❌ 渲染失败：${name} → ${err.message}`);
     console.log("   ", (err.stack || "").split("\n")[1] || "");
+  }
+}
+
+/* 录入表单：新建模式 / 编辑模式 */
+for (const [label, record] of [["新建面试记录", null], ["编辑面试记录", api.state.interviews[0]]]) {
+  try {
+    api.openInterviewForm(15, record);
+    console.log(`✅ 渲染通过：${label}`);
+  } catch (err) {
+    failed += 1;
+    console.log(`❌ 渲染失败：${label} → ${err.message}`);
   }
 }
 

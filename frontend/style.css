@@ -1316,3 +1316,136 @@ button.link:hover { filter: brightness(1.15); }
   flex: 0 0 auto;
   white-space: nowrap;
 }
+
+/* ============ 面试复盘 ============ */
+.interview-view {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.interview-form-title {
+  flex: 1;
+  text-align: center;
+  font-size: .95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 详情页里的记录列表 ---- */
+.iv { display: flex; flex-direction: column; gap: 12px; }
+
+.iv-record {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.iv-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.iv-date { font-size: .82rem; font-weight: 600; }
+
+.iv-outcome,
+.iv-perf {
+  font-size: .72rem;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.iv-outcome-pending { background: var(--warn-weak); color: var(--warn); }
+.iv-outcome-passed { background: var(--ok-weak); color: var(--ok); }
+.iv-outcome-failed { background: var(--danger-weak); color: var(--danger); }
+.iv-outcome-no_reply { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+
+.iv-perf-good { background: var(--ok-weak); color: var(--ok); }
+.iv-perf-ok { background: var(--warn-weak); color: var(--warn); }
+.iv-perf-bad { background: var(--danger-weak); color: var(--danger); }
+
+.iv-summary {
+  margin: 0;
+  font-size: .86rem;
+  line-height: 1.7;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.iv-questions > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 2px 0;
+}
+.iv-questions > summary::-webkit-details-marker { display: none; }
+.iv-questions > summary::before { content: "\25B8 "; }
+.iv-questions[open] > summary::before { content: "\25BE "; }
+
+.iv-q {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.iv-q-head { display: flex; align-items: center; gap: 8px; }
+.iv-q-index { font-size: .74rem; color: var(--muted); }
+.iv-q-text { margin: 0; font-size: .88rem; font-weight: 600; line-height: 1.65; }
+.iv-q-answer,
+.iv-q-gap,
+.iv-q-follow {
+  margin: 0;
+  font-size: .8rem;
+  line-height: 1.65;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.iv-q-gap { color: var(--warn); }
+
+.iv-actions { display: flex; gap: 8px; }
+
+/* ---- 录入表单 ---- */
+.iv-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.iv-field-label { font-size: .8rem; color: var(--muted); }
+
+.iv-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: .88rem;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
+}
+.iv-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+select.iv-input { min-height: 40px; }
+
+.iv-form-list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 12px; }
+
+.iv-form-q {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.iv-form-q-head { display: flex; align-items: center; justify-content: space-between; }
+.iv-form-q-title { font-size: .8rem; font-weight: 600; color: var(--muted); }
+
+.iv-perf-row { display: flex; align-items: center; gap: 10px; }
+.iv-perf-label { font-size: .8rem; color: var(--muted); flex: 0 0 auto; }
+.iv-perf-select { flex: 0 0 auto; width: auto; min-width: 110px; }
